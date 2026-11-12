@@ -127,9 +127,9 @@ NET_RATE_RIDE = 0.01
 NET_RATE_CTRL = 0.5
 
 -- sparks
-SPARK_MIN_DELAY = 1.5
-SPARK_MAX_DELAY = 2.5
-SPARK_DURATION = 0.9
+SPARK_MIN_DELAY = 0.2
+SPARK_MAX_DELAY = 10
+SPARK_DURATION = 0.55
 SPARK_ARCS_MIN = 2
 SPARK_ARCS_MAX = 4
 SPARK_SEGMENTS = 7
@@ -162,8 +162,8 @@ if SERVER then
     local reported = {}
     local frozen, hold, lastCtl, oldMT = false, nil, 0, 2
     local droneHP, shieldHP, lastShieldHit, lastHealthSend = DRONE_MAX_HP, SHIELD_MAX_HP, 0, 0
-    local chargeStarted, lastPulse, lastRegenT = 0, 0, timer.curtime()
-    local SV = { shP = false, shD = false, mode = 0, dpos = Vector(), dvel = Vector(), dk = 1, dT = 0 }
+    local lastPulse, lastRegenT = -100, timer.curtime()
+    local SV = { shP = false, shD = false, mode = 0, dpos = Vector(), dvel = Vector(), dang = Angle(), dk = 1, dT = 0 }
 
     local function say(s)
         net.start("dr_res")
@@ -193,6 +193,12 @@ if SERVER then
         if ply ~= ME then return end
         local path, pos = net.readString(), net.readVector()
         if ALLOWED_SOUNDS[path] then relaySound(path, pos) end
+    end)
+
+    net.receive("dr_spark", function(_, ply)
+        if ply ~= ME then return end
+        net.start("dr_spark")
+        net.send()
     end)
 
     net.receive("dr_teleport", function(_, ply)
@@ -366,13 +372,7 @@ if SERVER then
         if not wantSit then
             -- Follow the latest streamed drone seat point with a short, damped correction.
             -- The seat physics is frozen above so it cannot drift independently.
-            local dt = math.min(math.max(now - rT, 0), 0.05)
-            local alpha = 1 - math.exp(-55 * math.max(dt, 0.015))
-            pcall(function()
-                local current = seat:getPos()
-                seat:setPos(current + (rPos - current) * alpha)
-                seat:setAngles(Angle(0, rYaw + SEAT_YAW_OFF, 0))
-            end)
+            pcall(function() seat:setPos(rPos) end)
         end
     end)
 
@@ -695,8 +695,7 @@ if SERVER then
         SV.shD = bit.band(f, 2) ~= 0
         SV.dk, SV.dpos, SV.dvel, SV.dT = kT, pos, vel, timer.curtime()
         SV.mode, SV.charge = m, charge
-        if charging and not SV.charging then chargeStarted = timer.curtime() end
-        if not charging then chargeStarted = 0 end
+        SV.dang = Angle(ap, ay, ar)
         SV.charging = charging
         net.start("dr_state")
         net.writeUInt(f, 4)
@@ -711,21 +710,24 @@ if SERVER then
     end)
 
     net.receive("dr_pulse", function(_, ply)
-        if ply ~= ME or SV.mode ~= 2 or chargeStarted == 0 or timer.curtime() - chargeStarted < PULSE_CHARGE_TIME or timer.curtime() - lastPulse < 1 then return end
-        chargeStarted, lastPulse = 0, timer.curtime()
+        if ply ~= ME or SV.mode ~= 2 or timer.curtime() - lastPulse < 1 then return end
+        lastPulse = timer.curtime()
         local dir = net.readVector()
         local len = dir:getLength()
         if len < 0.001 then return end
         dir = dir * (1 / len)
-        local start = SV.dpos + Vector(0, 0, 20)
+        local start = SV.dpos + SV.dang:getForward() * (SIZE * SV.dk * 0.55)
         local finish = start + dir * PULSE_RANGE
-        local tr = trace.line(start, finish, ME)
-        if tr and tr.HitPos then finish = tr.HitPos end
-        pcall(function()
-            if valid(tr.Entity) and tr.Entity ~= ME and tr.Entity ~= seat then
-                tr.Entity:takeDamage(PULSE_DAMAGE, ME, ME)
-            end
-        end)
+        local tr
+        local traced = pcall(function() tr = trace.line(start, finish, ME) end)
+        if traced and tr and tr.HitPos then finish = tr.HitPos end
+        if traced and tr then
+            pcall(function()
+                if valid(tr.Entity) and tr.Entity ~= ME and tr.Entity ~= seat then
+                    tr.Entity:takeDamage(PULSE_DAMAGE, ME, ME)
+                end
+            end)
+        end
         net.start("dr_shot")
         net.writeVector(start)
         net.writeVector(finish)
@@ -1585,6 +1587,11 @@ end
 
 if IS_OWNER then
     local menuIndex, menuPlayers = 1, {}
+    local function setMenuOpen(open)
+        MENU_OPEN = open
+        DR.menuLock = open
+        pcall(function() input.lockControls(DR.lock or DR.menuLock) end)
+    end
     local function playerList()
         local ok, list = pcall(function() return find.allPlayers() end)
         if not ok or not list then return {} end
@@ -1604,7 +1611,7 @@ if IS_OWNER then
 
     hook.add("inputPressed", "dr_keys", function(key)
         if chatOpen() then return end
-        if key == KEY_MENU then MENU_OPEN = not MENU_OPEN return end
+        if key == KEY_MENU then setMenuOpen(not MENU_OPEN) return end
         if MENU_OPEN then
             menuPlayers = playerList()
             if key == KEY_W then menuIndex = math.max(1, menuIndex - 1)
@@ -1613,13 +1620,13 @@ if IS_OWNER then
                 net.start("dr_teleport")
                 net.writeEntity(menuPlayers[menuIndex])
                 net.send()
-                MENU_OPEN = false
+                setMenuOpen(false)
             end
             return
         end
         if key == KEY_PULSE and DR.mode == "ride" and DR.stage == "fly" and not DR.charging then
             DR.charging, DR.chargeT, DR.pulseFired = true, timer.curtime(), false
-            DR.chargeSparkPlayed = false
+            DR.chargeSparkIndex = 1
             sfx(PULSE_CHARGE_SOUND)
             DR.snT = 0
             return
@@ -1646,7 +1653,7 @@ if IS_OWNER then
     ---------------- input lock fallback (uses whatever CUserCmd methods exist) ----------------
     local cmdWarned = false
     hook.add("createmove", "dr_lock", function(cmd)
-        if not DR.lock or not cmd then return end
+        if (not DR.lock and not DR.menuLock) or not cmd then return end
         local did = false
         pcall(function()
             local function try(name, ...)
@@ -1789,18 +1796,29 @@ local function newArc()
     return pts
 end
 
-local function startBurst(now)
+local function startBurst(now, relayed)
     SP.active = true
     SP.t0 = now
     SP.arcs = {}
     for i = 1, math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX) do SP.arcs[i] = newArc() end
     SP.reroll = now + rnd(0.04, 0.09)
-    SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)
+    SP.nextT = IS_OWNER and (now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)) or nil
+    if IS_OWNER and not relayed then
+        sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)])
+        net.start("dr_spark")
+        net.send()
+    end
 end
+net.receive("dr_spark", function()
+    if not IS_OWNER then startBurst(timer.curtime(), true) end
+end)
 
 local matBeam = material.create("UnlitGeneric")
 matBeam:setTexture("$basetexture", "effects/laser1")
 matBeam:setInt("$flags", 16 + 32 + 128 + 8192)
+local matLightningSprite = material.create("UnlitGeneric")
+matLightningSprite:setTexture("$basetexture", "sprites/physbeam")
+matLightningSprite:setInt("$flags", 16 + 32 + 128 + 8192)
 local function beam(a, b, width, col)
     local ok = pcall(function()
         render.setMaterial(matBeam)
@@ -1830,15 +1848,19 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
     local u = DR.unit * DR.k
 
     -- A short cyan beam trail follows the drone; no hologram entities are used.
-    if now - trailT > 0.035 then
+    if now - trailT > 0.025 then
         trailT = now
         trail[#trail + 1] = { p = DR.pos, t = now }
-        while #trail > 14 do table.remove(trail, 1) end
+        while #trail > 56 do table.remove(trail, 1) end
     end
     for i = 2, #trail do
         local age = now - trail[i].t
-        local fade = clamp(1 - age / 0.5, 0, 1)
-        if fade > 0 then beam(trail[i - 1].p, trail[i].p, 2 + 6 * fade, Color(30, 210, 255, 150 * fade)) end
+        local fade = clamp(1 - age / 1.35, 0, 1)
+        if fade > 0 then
+            local width = math.max(8, u * (0.10 + 0.18 * fade))
+            beam(trail[i - 1].p, trail[i].p, width, Color(20, 130, 255, 75 * fade))
+            beam(trail[i - 1].p, trail[i].p, width * 0.42, Color(20, 225, 255, 220 * fade))
+        end
     end
 
     if SP.active and not DR.hidden then
@@ -1849,8 +1871,15 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
                 local wp = {}
                 for i = 1, #pts do wp[i] = toWorld(pts[i]) end
                 for i = 2, #wp do
-                    beam(wp[i - 1], wp[i], math.max(1, u * 0.035), Color(SPARK_COLOR.r, SPARK_COLOR.g, SPARK_COLOR.b, 210 * fade))
-                    beam(wp[i - 1], wp[i], math.max(0.6, u * 0.012), Color(SPARK_CORE.r, SPARK_CORE.g, SPARK_CORE.b, 255 * fade))
+                    local seg = wp[i] - wp[i - 1]
+                    local mid = (wp[i] + wp[i - 1]) * 0.5
+                    local boltCol = Color(SPARK_COLOR.r, SPARK_COLOR.g, SPARK_COLOR.b, 230 * fade)
+                    pcall(function()
+                        render.setMaterial(matLightningSprite)
+                        render.draw3DSprite(mid, math.max(5, u * 0.12), math.max(8, seg:getLength() * 1.5), boltCol)
+                    end)
+                    beam(wp[i - 1], wp[i], math.max(1, u * 0.018), boltCol)
+                    beam(wp[i - 1], wp[i], math.max(0.5, u * 0.006), Color(SPARK_CORE.r, SPARK_CORE.g, SPARK_CORE.b, 255 * fade))
                 end
             end
         end
@@ -1891,9 +1920,10 @@ hook.add("think", "dr_think", function()
     if IS_OWNER then
         if DR.mode ~= "follow" and not ME:isAlive() then endModes(true) end
         if DR.charging and DR.mode ~= "ride" then DR.charging = false end
-        if DR.charging and not DR.chargeSparkPlayed and now - DR.chargeT >= 1.4 then
-            DR.chargeSparkPlayed = true
+        if DR.charging and DR.chargeSparkIndex and DR.chargeSparkIndex <= 3
+            and now - DR.chargeT >= DR.chargeSparkIndex * 0.8 then
             sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)])
+            DR.chargeSparkIndex = DR.chargeSparkIndex + 1
         end
         if DR.charging and not DR.pulseFired and now - DR.chargeT >= PULSE_CHARGE_TIME then
             local eye = ME:getEyeAngles()
@@ -1902,6 +1932,7 @@ hook.add("think", "dr_think", function()
             local target = aim.HitPos or (ME:getEyePos() + eye:getForward() * PULSE_RANGE)
             local dir = target - origin
             if dir:getLengthSqr() > 0.01 then dir = dir:getNormalized() else dir = eye:getForward() end
+            PULSE_BEAM.start, PULSE_BEAM.finish, PULSE_BEAM.t = origin, target, now
             net.start("dr_pulse") net.writeVector(dir) net.send()
             DR.pulseFired, DR.charging, DR.recoil = true, false, 1
             DR.snT = 0
@@ -1994,8 +2025,8 @@ hook.add("think", "dr_think", function()
     updShield(shD, dt, now, DR.pos, du * SHIELD_D_DIST, du * SHIELD_D_WIDTH)
 
     -- sparks timing
-    if DR.ready and not SP.nextT then SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY) end
-    if SP.nextT and now >= SP.nextT then startBurst(now) end
+    if IS_OWNER and DR.ready and not SP.nextT then SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY) end
+    if IS_OWNER and SP.nextT and now >= SP.nextT then startBurst(now) end
     if SP.active then
         if now > SP.t0 + SPARK_DURATION then
             SP.active = false
