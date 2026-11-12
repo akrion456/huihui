@@ -1677,6 +1677,13 @@ if IS_OWNER then
     ---------------- tech HUD + menu ----------------
     local hudFont = render.createFont("Roboto", 20, 600, true)
     local smallFont = render.createFont("Roboto", 15, 600, true)
+    local function drawHudOutline(x, y, w, h, thickness)
+        -- drawOutlinedRect is not exposed by every Starfall render implementation.
+        render.drawRect(x, y, w, thickness)
+        render.drawRect(x, y + h - thickness, w, thickness)
+        render.drawRect(x, y + thickness, thickness, h - thickness * 2)
+        render.drawRect(x + w - thickness, y + thickness, thickness, h - thickness * 2)
+    end
     hook.add("drawhud", "dr_hud", function()
         local w, h = render.getResolution()
         local cyan, dim, dark = Color(40, 230, 255, 235), Color(40, 150, 180, 220), Color(4, 15, 24, 210)
@@ -1684,7 +1691,7 @@ if IS_OWNER then
         render.setColor(dark)
         render.drawRect(24, h - 116, 282, 92)
         render.setColor(cyan)
-        render.drawOutlinedRect(24, h - 116, 282, 92)
+        drawHudOutline(24, h - 116, 282, 92, 2)
         render.drawSimpleText(36, h - 108, "DRONE COMPANION // SYSTEM STATUS", 0, 0)
         render.setColor(dim)
         render.drawSimpleText(36, h - 83, "DRONE", 0, 0)
@@ -1716,7 +1723,7 @@ if IS_OWNER then
         if DR.charging then
             local pct = clamp((timer.curtime() - DR.chargeT) / PULSE_CHARGE_TIME, 0, 1)
             render.setColor(dark) render.drawRect(w / 2 - 120, h * 0.68, 240, 19)
-            render.setColor(cyan) render.drawOutlinedRect(w / 2 - 120, h * 0.68, 240, 19)
+            render.setColor(cyan) drawHudOutline(w / 2 - 120, h * 0.68, 240, 19, 2)
             render.drawRect(w / 2 - 117, h * 0.68 + 3, 234 * pct, 13)
             render.drawSimpleText(w / 2, h * 0.68 - 22, "PULSE CHARGING // " .. math.floor(pct * 100) .. "%", 1, 0)
         end
@@ -1725,7 +1732,7 @@ if IS_OWNER then
             menuIndex = clamp(menuIndex, 1, math.max(1, #menuPlayers))
             local x, y, pw, ph = w / 2 - 180, h / 2 - 130, 360, 260
             render.setColor(dark) render.drawRect(x, y, pw, ph)
-            render.setColor(cyan) render.drawOutlinedRect(x, y, pw, ph)
+            render.setColor(cyan) drawHudOutline(x, y, pw, ph, 2)
             render.setFont(hudFont)
             render.drawSimpleText(w / 2, y + 18, "TACTICAL LINK // TELEPORT", 1, 0)
             render.setFont(smallFont)
