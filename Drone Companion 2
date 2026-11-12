@@ -1932,8 +1932,8 @@ local function drawSparks(now)
 
     render.setMaterial(glowMat)
     local pulse = fade * (0.15 + math.random() * 0.15)
-    render.setColor(Color(SPARK_COLOR.r * pulse, SPARK_COLOR.g * pulse, SPARK_COLOR.b * pulse, 255))
-    render.drawSprite(DR.pos, unit * 1.2, unit * 1.2)
+    local pulseColor = Color(SPARK_COLOR.r * pulse, SPARK_COLOR.g * pulse, SPARK_COLOR.b * pulse, 255)
+    render.draw3DSprite(DR.pos, unit * 1.2, unit * 1.2, pulseColor)
 
     for _, arc in ipairs(SP.arcs) do
         local k = fade * arc.k
@@ -1948,17 +1948,13 @@ local function drawSparks(now)
             local steps = math.max(1, math.ceil(d:getLength() / step))
             for j = 0, steps - 1 do
                 local p = p1 + d * (j / steps)
-                render.setColor(cg)
-                render.drawSprite(p, glowSz, glowSz)
-                render.setColor(cc)
-                render.drawSprite(p, coreSz, coreSz)
+                render.draw3DSprite(p, glowSz, glowSz, cg)
+                render.draw3DSprite(p, coreSz, coreSz, cc)
             end
         end
-        render.setColor(cg)
-        render.drawSprite(w[1], glowSz * 2.2, glowSz * 2.2)
-        render.drawSprite(w[#w], glowSz * 1.6, glowSz * 1.6)
-        render.setColor(cc)
-        render.drawSprite(w[1], coreSz * 2.5, coreSz * 2.5)
+        render.draw3DSprite(w[1], glowSz * 2.2, glowSz * 2.2, cg)
+        render.draw3DSprite(w[#w], glowSz * 1.6, glowSz * 1.6, cg)
+        render.draw3DSprite(w[1], coreSz * 2.5, coreSz * 2.5, cc)
     end
 end
 
