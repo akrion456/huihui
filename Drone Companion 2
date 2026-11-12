@@ -1,0 +1,1579 @@
+--@name Drone Companion 2
+--@author AkrioN
+--@shared
+
+----------------------------------------------------------------
+-- SETTINGS
+----------------------------------------------------------------
+OBJ_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/drone2.obj"
+TEX_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/mask_low.png"
+EMI_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/emissiveMap2.png"
+CUBE_MDL = "models/hunter/blocks/cube025x025x025.mdl"
+
+SIZE = 35
+SCALE = nil                      -- raw scale override
+MODEL_ANG = Angle(0, 90, 90)
+CENTER = true
+DEBUG = true                     -- prints lock / seat / shield results in chat
+
+-- follow
+FOLLOW_BACK = 8
+FOLLOW_SIDE = -32                -- negative = left
+HOVER_HEIGHT = 62
+BOB_AMOUNT = 3
+SPRING = 60
+DAMP = 11
+MAX_SPEED = 2500
+TELEPORT_DIST = 3000
+FACE_AIM = true
+AIM_TURN = 12
+AIM_MIN_DIST = 80
+AIM_RANGE = 6000
+SIZE_RATE = 2.2
+
+-- keys
+KEY_SHIELD_P = 18   -- H
+KEY_SHIELD_D = 20   -- J
+KEY_CONTROL  = 21   -- K
+KEY_RIDE     = 22   -- L
+
+-- sounds (played ONCE per press, on and off)
+SND_SHIELD_P = "ambient/levels/outland/cave_siren1_loop.wav"
+SND_SHIELD_D = "ambient/levels/outland/cave_siren2_loop.wav"
+SND_CONTROL  = "ambient/levels/outland/cave_siren_loop3.wav"
+SND_RIDE     = "ambient/levels/outland/cave_siren_loop4.wav"
+SFX_VOLUME = 0.8
+SFX_LEVEL = 80
+SFX_MAX_TIME = 3                 -- stop the sound after this many seconds (nil = let it finish)
+
+-- body lock (K mode)
+LOCK_API = true                  -- use input.lockControls while frozen (set false if your mouse stops turning)
+
+-- invisible seat (L mode)
+SEAT_MODEL = "models/nova/airboat_seat.mdl"
+SEAT_YAW_OFF = -90               -- seat yaw = facing yaw + this (if you sit sideways change to 0 / 90 / 180)
+SEAT_WAIT = 6                    -- seconds to wait for you to be seated before cancelling
+
+-- multiplayer sync
+STATE_RATE = 0.1
+
+-- force shield (directional model)
+SHIELD_OBJ_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/shield.obj"
+SHIELD_TEX_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/force_shield_phase_1.png"
+SHIELD_EMI_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/emissiveMap3.png"
+SHIELD_AUTO_AXIS = true          -- auto-detect which way the model faces (prints the result)
+SHIELD_FLIP = false              -- true = turn the model 180 degrees
+SHIELD_MODEL_ANG = Angle(0, 0, 0) -- extra manual rotation (after auto-detect). Model's front must end up on +X
+SHIELD_P_DIST = 50               -- player shield distance from your body center
+SHIELD_P_WIDTH = 115             -- player shield size (largest dimension of the model)
+SHIELD_D_DIST = 0.85             -- drone shield distance  (x drone size)
+SHIELD_D_WIDTH = 1.9             -- drone shield size      (x drone size)
+SHIELD_BRIGHT = 1.3
+SHIELD_FADE_IN = 0.12            -- seconds to appear
+SHIELD_FADE_OUT = 0.55           -- seconds to disappear
+SHIELD_HOLD = 0.35               -- stays visible this long after the last threat message
+SHIELD_BOOT_TIME = 0.9           -- activation flash length
+SHIELD_TURN = 18                 -- rotation speed (higher = snappier)
+
+-- threat detection / defense (server side)
+SHIELD_DETECT = 380              -- shield starts appearing when a projectile is this close
+SHIELD_LEAD = 0.35               -- ...or this many seconds from impact (for fast projectiles)
+SCAN_INTERVAL = 0.08             -- how often to search for projectiles
+SCAN_RADIUS = 900
+PROJ_MIN_SPEED = 150             -- real projectiles (rockets, grenades, bolts...)
+PROP_MIN_SPEED = 450             -- thrown / flying props
+BLOCK_DAMAGE = true              -- block bullet / blast / melee / energy damage to you while the shield is on
+PROJ_REFLECT = true              -- bounce projectiles off the shield
+PROJ_KEEP = 0.85                 -- speed kept after the bounce
+PROJ_REMOVE_IF_FAIL = true       -- if bouncing is not allowed, try to delete real projectiles instead
+
+-- impact effects (client)
+HIT_VOLUME = 0.7
+HIT_EFFECT = "ManhackSparks"     -- nil = no effect
+HIT_SOUNDS = {
+    "weapons/fx/rics/ric1.wav", "weapons/fx/rics/ric2.wav", "weapons/fx/rics/ric3.wav",
+    "weapons/fx/rics/ric4.wav", "weapons/fx/rics/ric5.wav",
+    "ambient/energy/zap1.wav", "ambient/energy/zap2.wav", "ambient/energy/zap3.wav",
+}
+
+-- control mode (K)
+CONTROL_SPEED = 450
+CONTROL_RANGE = 2500
+CONTROL_BOOST = 2.5
+FLY_ACCEL = 3.5
+CAM_BLEND_TIME = 0.6
+CTRL_CAM_FWD = 12
+CTRL_HIDE_DRONE = true
+
+-- ride mode (L)
+RIDE_SIZE = 100
+RIDE_SPEED = 600
+RIDE_BOOST = 2
+RIDE_LAND_SPEED = 350
+RIDE_SEAT_OFF = Vector(0, 0, 0)  -- seat origin relative to the top of the drone
+RIDE_EYE_UP = 50                 -- fallback eye height above the seat (normally auto-calibrated)
+RIDE_RIDER_H = 60                -- rider height above the seat for collision
+RIDE_PITCH = 0.5                 -- how much the drone nose follows your camera pitch (0 = none)
+NET_RATE_RIDE = 0.033
+NET_RATE_CTRL = 0.5
+
+-- sparks
+SPARK_MIN_DELAY = 5
+SPARK_MAX_DELAY = 10
+SPARK_DURATION = 0.65
+SPARK_ARCS_MIN = 2
+SPARK_ARCS_MAX = 4
+SPARK_SEGMENTS = 7
+SPARK_COLOR = Color(0, 190, 255)
+SPARK_CORE = Color(190, 250, 255)
+SPARK_VOLUME = 0.7
+SPARK_SOUNDS = {
+    "ambient/energy/newspark01.wav", "ambient/energy/newspark02.wav", "ambient/energy/newspark03.wav",
+    "ambient/energy/newspark04.wav", "ambient/energy/newspark05.wav", "ambient/energy/newspark06.wav",
+}
+
+----------------------------------------------------------------
+-- SERVER: body freeze, invisible seat, shield defense, state relay
+----------------------------------------------------------------
+if SERVER then
+    local ME = owner()
+    local seat = nil
+    local rPos, rVel, rT = Vector(), Vector(), 0
+    local lastMsg, noFall = 0, 0
+    local wantSit, seatedOnce, sitStart, nextTry, tryN, shownVis = false, false, 0, 0, 0, false
+    local reported = {}
+    local frozen, hold, lastCtl, oldMT = false, nil, 0, 2
+
+    local function say(s)
+        net.start("dr_res")
+        net.writeString(s)
+        net.send(ME)
+    end
+
+    local function valid(e)
+        if not e then return false end
+        local ok, r = pcall(function() return e:isValid() end)
+        return ok and r
+    end
+
+    ------------- body freeze (K mode and ride approach) -------------
+    local function freeze()
+        frozen = true
+        pcall(function() oldMT = ME:getMoveType() end)
+        if oldMT == nil or oldMT == 0 then oldMT = 2 end
+        local a = pcall(function() ME:setMoveType(0) end)   -- MOVETYPE_NONE
+        local b = pcall(function() ME:setPos(ME:getPos()) end)
+        say("body freeze -> setMoveType: " .. (a and "ok" or "BLOCKED") .. ", setPos: " .. (b and "ok" or "BLOCKED"))
+    end
+
+    local function unfreeze(p)
+        if not frozen then return end
+        frozen = false
+        hold = nil
+        pcall(function() ME:setMoveType(oldMT or 2) end)
+        if p then pcall(function() ME:setPos(p) end) end
+        noFall = timer.curtime() + 4
+    end
+
+    net.receive("dr_ctl", function(_, ply)
+        if ply ~= ME then return end
+        local cmd = net.readUInt(2)      -- 0 release, 1 hold/update, 2 release + teleport
+        local p = net.readVector()
+        lastCtl = timer.curtime()
+        if cmd == 0 then
+            unfreeze(nil)
+        elseif cmd == 2 then
+            unfreeze(p)
+        else
+            hold = p
+            if not frozen then freeze() end
+        end
+    end)
+
+    hook.add("think", "dr_hold", function()
+        if not frozen then return end
+        if timer.curtime() - lastCtl > 3 then unfreeze(nil) return end
+        if hold and (ME:getPos() - hold):getLengthSqr() > 0.25 then
+            pcall(function() ME:setPos(hold) end)
+        end
+    end)
+
+    ------------- seat (L mode) -------------
+    local function setInvisible(s, inv)
+        pcall(function() s:setColor(Color(255, 255, 255, inv and 0 or 255)) end)
+        pcall(function() s:setRenderMode(inv and 1 or 0) end)
+        pcall(function() s:setNoDraw(inv) end)
+    end
+
+    local function inSeat()
+        local ok, r = pcall(function()
+            local v = ME:getVehicle()
+            return valid(v) and v == seat
+        end)
+        return ok and r or false
+    end
+
+    local function removeSeat(tp)
+        local s = seat
+        seat = nil
+        wantSit, seatedOnce = false, false
+        if valid(s) then
+            pcall(function() s:ejectDriver() end)
+            timer.simple(0.1, function()
+                if valid(s) then pcall(function() s:remove() end) end
+            end)
+        end
+        if tp then
+            timer.simple(0.2, function() pcall(function() ME:setPos(tp) end) end)
+        end
+        noFall = timer.curtime() + 4
+    end
+
+    local function makeSeat(p, yaw)
+        removeSeat(nil)
+        if not prop.canSpawn() then say("cannot spawn the seat (prop limit or cooldown)") return end
+        local ok, s = pcall(prop.createSeat, p, Angle(0, yaw + SEAT_YAW_OFF, 0), SEAT_MODEL, true)
+        if not ok or not valid(s) then say("seat spawn failed: " .. tostring(s)) return end
+        seat = s
+        setInvisible(s, true)
+        rPos, rVel, rT = p, Vector(), timer.curtime()
+        lastMsg = timer.curtime()
+        wantSit, seatedOnce, shownVis, tryN, nextTry = true, false, false, 0, 0
+        sitStart = timer.curtime()
+        reported = {}
+        say("seat created")
+    end
+
+    local attempts = {
+        { "enterVehicle", function() ME:enterVehicle(seat) end },
+        { "seat:use",     function() seat:use(ME) end },
+    }
+
+    net.receive("dr_seat", function(_, ply)
+        if ply ~= ME then return end
+        local cmd = net.readUInt(3)
+        local p = net.readVector()
+        local v = net.readVector()
+        local yaw = net.readFloat()
+        lastMsg = timer.curtime()
+        if cmd == 2 then makeSeat(p, yaw)
+        elseif cmd == 3 then rPos, rVel, rT = p, v, timer.curtime()
+        elseif cmd == 4 then removeSeat(nil)
+        elseif cmd == 5 then removeSeat(p) end
+    end)
+
+    local function tellOut()
+        net.start("dr_out")
+        net.send(ME)
+    end
+
+    hook.add("think", "dr_srv", function()
+        if not seat then return end
+        if not valid(seat) then seat = nil tellOut() return end
+        local now = timer.curtime()
+
+        if not ME:isAlive() then removeSeat(nil) tellOut() return end
+        if now - lastMsg > 3 then removeSeat(nil) tellOut() return end
+
+        if wantSit then
+            if inSeat() then
+                wantSit, seatedOnce = false, true
+                say("you are seated")
+            elseif now >= nextTry then
+                nextTry = now + 0.25
+                tryN = tryN + 1
+                local a = attempts[(tryN - 1) % #attempts + 1]
+                local ok, err = pcall(a[2])
+                if not reported[a[1]] then
+                    reported[a[1]] = true
+                    say("auto-seat via " .. a[1] .. ": " .. (ok and "called" or tostring(err)))
+                end
+                if now - sitStart > 1.5 and not shownVis then
+                    shownVis = true
+                    setInvisible(seat, false)
+                    say("auto-seat did not work: look down at the seat on your feet and press E")
+                end
+            end
+        elseif seatedOnce and not inSeat() then
+            removeSeat(nil)
+            tellOut()
+            return
+        end
+
+        if not wantSit then
+            local dt = math.min(now - rT, 0.12)
+            pcall(function() seat:setPos(rPos + rVel * dt) end)
+        end
+    end)
+
+    ------------- force shield defense -------------
+    local SV = { shP = false, shD = false, dpos = Vector(), dvel = Vector(), dk = 1, dT = -100 }
+    local lastThr = { 0, 0 }
+    local said = {}
+    local function once(key, msg)
+        if not said[key] then said[key] = true say(msg) end
+    end
+    local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
+    local function norm(v)
+        local l = v:getLength()
+        if l < 0.001 then return Vector(1, 0, 0) end
+        return v * (1 / l)
+    end
+
+    local function centerOf(kind, now)
+        if kind == 1 then return ME:getPos() + Vector(0, 0, 36) end
+        return SV.dpos + SV.dvel * math.min(now - SV.dT, 0.2)
+    end
+    local function contactOf(kind)
+        if kind == 1 then return SHIELD_P_DIST + 6 end
+        return SIZE * SV.dk * SHIELD_D_DIST + 6
+    end
+    local function halfWidthOf(kind)
+        if kind == 1 then return SHIELD_P_WIDTH * 0.5 end
+        return SIZE * SV.dk * SHIELD_D_WIDTH * 0.5
+    end
+    local function activeKind(kind, now)
+        if kind == 1 then return SV.shP and ME:isAlive() end
+        return SV.shD and (now - SV.dT) < 1.2
+    end
+
+    local function sendThr(kind, dir, prox, hit, now)
+        if now - lastThr[kind] < (hit and 0.03 or 0.06) then return end
+        lastThr[kind] = now
+        net.start("dr_thr")
+        net.writeUInt(kind, 2)
+        net.writeVector(dir)
+        net.writeFloat(prox)
+        net.writeBool(hit)
+        net.send()
+    end
+
+    -- which entities count as projectiles: 2 = real projectile, 1 = fast prop
+    local PROJ_WORDS = { "missile", "rocket", "grenade", "bolt", "arrow", "flechette", "ball", "bullet", "proj", "plasma", "dart", "shell", "satchel" }
+    local function projClass(c)
+        c = string.lower(c)
+        if string.find(c, "weapon_", 1, true) == 1 or string.find(c, "gmod_", 1, true) == 1
+            or string.find(c, "starfall", 1, true) then return nil end
+        for i = 1, #PROJ_WORDS do
+            if string.find(c, PROJ_WORDS[i], 1, true) then return 2 end
+        end
+        if string.find(c, "prop_physics", 1, true) == 1 then return 1 end
+        return nil
+    end
+
+    local watch, reflected, nextScan, scanBack = {}, {}, 0, 0
+
+    local function scan(now)
+        for k, t in pairs(reflected) do
+            if now - t > 3 then reflected[k] = nil end
+        end
+        local useP, useD = activeKind(1, now), activeKind(2, now)
+        if not (useP or useD) then watch = {} return end
+        local newW = {}
+        local function add(list)
+            if not list then return end
+            for i = 1, math.min(#list, 60) do
+                local e = list[i]
+                if valid(e) then
+                    local ok, cls = pcall(function() return projClass(e:getClass()) end)
+                    if ok and cls then
+                        local skip = false
+                        if cls == 1 then
+                            pcall(function() if e:getOwner() == ME then skip = true end end)
+                            pcall(function() if e:isPlayerHolding() then skip = true end end)
+                        end
+                        if not skip then newW[e:entIndex()] = { e = e, cls = cls } end
+                    end
+                end
+            end
+        end
+        local filter = function(e)
+            if e == ME then return false end
+            local ok, r = pcall(function() return projClass(e:getClass()) ~= nil end)
+            return ok and r
+        end
+        local ok, err = pcall(function()
+            local cP = ME:getPos() + Vector(0, 0, 36)
+            local cD = centerOf(2, now)
+            if useP and useD and (cP - cD):getLength() < 500 then
+                add(find.inSphere(cP, SCAN_RADIUS + 500, filter))
+            else
+                if useP then add(find.inSphere(cP, SCAN_RADIUS, filter)) end
+                if useD then add(find.inSphere(cD, SCAN_RADIUS, filter)) end
+            end
+        end)
+        if ok then
+            watch = newW
+        else
+            once("find", "shield: find.inSphere failed: " .. tostring(err))
+            scanBack = now + 2
+        end
+    end
+
+    local function reflect(e, c, R, cls)
+        local p = e:getPos()
+        local v = e:getVelocity()
+        local n = norm(p - c)
+        local vn = v:dot(n)
+        if vn >= 0 then return end
+        local nv = (v - n * (2 * vn)) * PROJ_KEEP
+        local ok1 = pcall(function() e:setVelocity(nv) end)
+        local ok2 = pcall(function() e:getPhysicsObject():setVelocity(nv) end)
+        pcall(function() e:setAngles(nv:getAngle()) end)
+        pcall(function() e:setPos(c + n * (R + 4)) end)
+        once("reflect", "shield: projectile bounce -> entity setVelocity: " .. (ok1 and "ok" or "BLOCKED")
+            .. ", physobj setVelocity: " .. (ok2 and "ok" or "BLOCKED"))
+        if not (ok1 or ok2) and cls == 2 and PROJ_REMOVE_IF_FAIL then
+            local ok3 = pcall(function() e:remove() end)
+            once("remove", "shield: bounce not allowed, remove(): " .. (ok3 and "ok" or "BLOCKED"))
+        end
+    end
+
+    local function process(now)
+        for idx, w in pairs(watch) do
+            local e = w.e
+            if not valid(e) then
+                watch[idx] = nil
+            else
+                local okp, p, v = pcall(function() return e:getPos(), e:getVelocity() end)
+                if okp and p and v then
+                    local sp = v:getLength()
+                    if sp >= (w.cls == 2 and PROJ_MIN_SPEED or PROP_MIN_SPEED) then
+                        local vd = v * (1 / sp)
+                        for kind = 1, 2 do
+                            if activeKind(kind, now) then
+                                local c = centerOf(kind, now)
+                                local R = contactOf(kind)
+                                local rel = c - p
+                                local dist = rel:getLength()
+                                local t = rel:dot(vd)
+                                if t > -R * 0.3 then
+                                    local miss = (rel - vd * t):getLength()
+                                    local reach = math.max(SHIELD_DETECT, sp * SHIELD_LEAD)
+                                    if miss < halfWidthOf(kind) * 1.2 + 10 and dist < reach + R then
+                                        local dirOut = norm(p - c)
+                                        local fresh = not (reflected[idx] and now - reflected[idx] < 0.8)
+                                        if dist <= R + sp * 0.02 and fresh then
+                                            reflected[idx] = now
+                                            if PROJ_REFLECT then pcall(reflect, e, c, R, w.cls) end
+                                            sendThr(kind, dirOut, 1, true, now)
+                                        else
+                                            sendThr(kind, dirOut, clamp(1 - (dist - R) / reach, 0, 1), false, now)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    hook.add("think", "dr_shield", function()
+        local now = timer.curtime()
+        if now >= nextScan and now >= scanBack then
+            nextScan = now + SCAN_INTERVAL
+            scan(now)
+        end
+        process(now)
+    end)
+
+    -- hitscan bullets: show the shield + impact when a shot is aimed at it
+    pcall(function()
+        hook.add("EntityFireBullets", "dr_bullets", function(shooter, data)
+            if not (SV.shP or SV.shD) or shooter == ME or not data then return end
+            pcall(function()
+                local src, dir = data.Src or data.src, data.Dir or data.dir
+                if not src or not dir then return end
+                dir = norm(dir)
+                local now = timer.curtime()
+                for kind = 1, 2 do
+                    if activeKind(kind, now) then
+                        local c = centerOf(kind, now)
+                        local t = (c - src):dot(dir)
+                        if t > 0 and t < 8000 then
+                            local miss = ((src + dir * t) - c):getLength()
+                            local hw = halfWidthOf(kind)
+                            if miss < hw * 1.3 then
+                                sendThr(kind, norm(src - c), 1, miss < hw * 0.9, now)
+                            end
+                        end
+                    end
+                end
+            end)
+        end)
+    end)
+
+    -- damage block (+ fall protection for K / L)
+    local BLOCK_TYPES = { 1, 2, 4, 16, 64, 128, 256, 1024, 16777216, 33554432, 134217728, 536870912, 1073741824 }
+    local BLOCK_MASK = 0
+    for _, b in ipairs(BLOCK_TYPES) do BLOCK_MASK = BLOCK_MASK + b end
+
+    local pend = nil
+    local function guardHealth()
+        if pend then return end
+        local okh, h, a = pcall(function() return ME:getHealth(), ME:getArmor() end)
+        if not okh then return end
+        pend = { h = h, a = a }
+        timer.simple(0, function()
+            local p = pend
+            pend = nil
+            if not p or not ME:isAlive() then return end
+            if ME:getHealth() < p.h then
+                local ok = pcall(function() ME:setHealth(p.h) end)
+                pcall(function() ME:setArmor(p.a) end)
+                once("heal", ok and "shield: the hook can't cancel damage here, health restored with setHealth"
+                    or "shield: damage NOT blocked (hook ignored and setHealth BLOCKED)")
+            else
+                once("hook", "shield: damage blocked by the hook")
+            end
+        end)
+    end
+
+    pcall(function()
+        hook.add("EntityTakeDamage", "dr_dmg", function(target, attacker, inflictor, amount, dtype)
+            local isMe = (target == ME) or (seat ~= nil and target == seat)
+            if not isMe then return end
+            if bit.band(dtype, 32) ~= 0 then
+                if seat ~= nil or frozen or timer.curtime() < noFall then return true end
+                return
+            end
+            if BLOCK_DAMAGE and SV.shP and attacker ~= ME and bit.band(dtype, BLOCK_MASK) ~= 0 then
+                local now = timer.curtime()
+                if target == ME then guardHealth() end
+                local c = centerOf(1, now)
+                local dir
+                pcall(function()
+                    if valid(attacker) then dir = attacker:getPos() + Vector(0, 0, 40) - c
+                    elseif valid(inflictor) then dir = inflictor:getPos() - c end
+                end)
+                sendThr(1, norm(dir or Vector(1, 0, 0)), 1, true, now)
+                return true
+            end
+        end)
+    end)
+
+    ------------- state relay (so other players see shields / modes) -------------
+    net.receive("dr_state", function(_, ply)
+        if ply ~= ME then return end
+        local f = net.readUInt(4)
+        local m = net.readUInt(2)
+        local kT = net.readFloat()
+        local pos = net.readVector()
+        local vel = net.readVector()
+        local ap, ay, ar = net.readFloat(), net.readFloat(), net.readFloat()
+        SV.shP = bit.band(f, 1) ~= 0
+        SV.shD = bit.band(f, 2) ~= 0
+        SV.dk, SV.dpos, SV.dvel, SV.dT = kT, pos, vel, timer.curtime()
+        net.start("dr_state")
+        net.writeUInt(f, 4)
+        net.writeUInt(m, 2)
+        net.writeFloat(kT)
+        net.writeVector(pos)
+        net.writeVector(vel)
+        net.writeFloat(ap) net.writeFloat(ay) net.writeFloat(ar)
+        net.send()
+    end)
+end
+
+----------------------------------------------------------------
+-- CLIENT
+----------------------------------------------------------------
+if CLIENT then
+
+local ME = owner()
+local IS_OWNER = (player() == owner())
+if IS_OWNER then enableHud(player(), true) end     -- only the chip owner may do this
+
+local KEY_W, KEY_S, KEY_A, KEY_D, KEY_SPACE, KEY_CTRL, KEY_SHIFT = 33, 29, 11, 14, 65, 83, 79
+
+net.receive("dr_res", function()
+    local s = net.readString()
+    if DEBUG then print("[Drone] " .. s) end
+end)
+
+---------------- helpers ----------------
+local function approach(c, t, s) if c < t then return math.min(c + s, t) else return math.max(c - s, t) end end
+local function ease(t) return t * t * (3 - 2 * t) end
+local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
+local function angDiff(a, b) return (a - b + 180) % 360 - 180 end
+local function rnd(a, b) return a + math.random() * (b - a) end
+
+local function chatOpen()
+    local ok, r = pcall(function() return chat.isOpen() end)
+    return ok and r or false
+end
+local function down(k) return (not chatOpen()) and input.isKeyDown(k) end
+
+local function seated()
+    local ok, r = pcall(function() return ME:inVehicle() end)
+    return ok and r or false
+end
+
+local function splitPlain(s, sep)
+    local out, n, pos = {}, 0, 1
+    while true do
+        local i = string.find(s, sep, pos, true)
+        if not i then
+            local piece = string.sub(s, pos)
+            if piece ~= "" then n = n + 1 out[n] = piece end
+            break
+        end
+        if i > pos then n = n + 1 out[n] = string.sub(s, pos, i - 1) end
+        pos = i + #sep
+    end
+    return out
+end
+local function splitKeep(s, sep)
+    local out, n, pos = {}, 0, 1
+    while true do
+        local i = string.find(s, sep, pos, true)
+        if not i then n = n + 1 out[n] = string.sub(s, pos) break end
+        n = n + 1 out[n] = string.sub(s, pos, i - 1)
+        pos = i + #sep
+    end
+    return out
+end
+
+---------------- state ----------------
+local DR = {
+    pos = ME:getPos() + Vector(0, 0, HOVER_HEIGHT), vel = Vector(), yaw = ME:getEyeAngles().y,
+    aimPitch = 0, tiltP = 0, tiltR = 0, ang = Angle(),
+    top = 10, bot = -10, unit = SIZE, fitHalf = SIZE / 2,
+    k = 1, kT = 1, appliedK = -1,
+    mode = "follow", stage = "", sub = "", stT = 0,
+    camBlend = 0, camT = 0, camStyle = "ctrl",
+    lock = false, seat = false, holdPos = Vector(), netT = 0, lkT = 0, snT = 0, bodyStart = Vector(),
+    rideYaw = 0, eyeOff = Vector(0, 0, RIDE_EYE_UP), viewAng = ME:getEyeAngles(),
+    hidden = false, ready = false,
+}
+local REM = { mode = 0, kT = 1, pos = Vector(), vel = Vector(), ang = Angle(), t = -100 }
+local layers = {}
+local anchor = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(0.1, 0.1, 0.1))
+anchor:setNoDraw(true)
+local sndHolo = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(0.1, 0.1, 0.1))
+sndHolo:setNoDraw(true)
+
+---------------- sound (one shot) ----------------
+local function sfx(path)
+    pcall(function() anchor:emitSound(path, SFX_LEVEL, 100, SFX_VOLUME) end)
+    if SFX_MAX_TIME then
+        timer.simple(SFX_MAX_TIME, function()
+            if not pcall(function() anchor:stopSound(path) end) then
+                pcall(function() anchor:stopSound(0) end)
+            end
+        end)
+    end
+end
+
+---------------- net (owner side) ----------------
+-- seat cmd: 2 create, 3 update, 4 release, 5 release + teleport
+local function sendSeat(cmd, p, v, yaw)
+    net.start("dr_seat")
+    net.writeUInt(cmd, 3)
+    net.writeVector(p or Vector())
+    net.writeVector(v or Vector())
+    net.writeFloat(yaw or 0)
+    net.send()
+end
+
+-- body freeze cmd: 0 release, 1 hold, 2 release + teleport
+local function sendCtl(cmd, p)
+    net.start("dr_ctl")
+    net.writeUInt(cmd, 2)
+    net.writeVector(p or Vector())
+    net.send()
+end
+
+local shP, shD   -- defined below (shields)
+
+local function sendState()
+    if not IS_OWNER then return end
+    pcall(function()
+        net.start("dr_state")
+        net.writeUInt((shP.on and 1 or 0) + (shD.on and 2 or 0), 4)
+        net.writeUInt(DR.mode == "control" and 1 or (DR.mode == "ride" and 2 or 0), 2)
+        net.writeFloat(DR.kT)
+        net.writeVector(DR.pos)
+        net.writeVector(DR.vel)
+        net.writeFloat(DR.ang.p) net.writeFloat(DR.ang.y) net.writeFloat(DR.ang.r)
+        net.send()
+    end)
+end
+
+local function lockBody()
+    DR.lock = true
+    DR.lkT = 0
+    if LOCK_API then pcall(function() input.lockControls(true) end) end
+    sendCtl(1, DR.bodyStart)
+end
+
+local function unlockBody(cmd, p)
+    if not DR.lock then return end
+    DR.lock = false
+    if LOCK_API then pcall(function() input.lockControls(false) end) end
+    sendCtl(cmd or 0, p)
+end
+
+local function endModes(sendRelease, tp)
+    if DR.seat and sendRelease then
+        if tp then sendSeat(5, tp) else sendSeat(4) end
+    end
+    unlockBody(0)
+    DR.seat = false
+    DR.mode = "follow"
+    DR.stage = ""
+    DR.sub = ""
+    DR.camT = 0
+    DR.kT = 1
+    DR.snT = 0
+end
+
+net.receive("dr_out", function()
+    if IS_OWNER and DR.mode ~= "follow" then
+        print("[Drone] you left the seat, mode ended")
+        endModes(false)
+    end
+end)
+
+---------------- job runner ----------------
+local jobs = {}
+local function addJob(f) jobs[#jobs + 1] = coroutine.create(f) end
+local function pace() if quotaAverage() > quotaMax() * 0.6 then coroutine.yield() end end
+hook.add("think", "dr_jobs", function()
+    while #jobs > 0 and quotaAverage() < quotaMax() * 0.6 do
+        local co = jobs[1]
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            if err ~= nil then print("[Drone] job error: " .. tostring(err)) end
+            table.remove(jobs, 1)
+        elseif coroutine.status(co) == "dead" then
+            table.remove(jobs, 1)
+        end
+    end
+end)
+
+---------------- materials ----------------
+local matBase = material.create("VertexLitGeneric")
+matBase:setTextureURL("$basetexture", TEX_URL)
+matBase:setInt("$nocull", 1)
+
+local matEmi = material.create("UnlitGeneric")
+matEmi:setTextureURL("$basetexture", EMI_URL)
+matEmi:setInt("$flags", 16 + 32 + 128 + 8192)
+
+local matLift = material.create("UnlitGeneric")
+matLift:setTextureURL("$basetexture", EMI_URL)
+matLift:setInt("$flags", 16 + 32 + 128 + 8192)
+matLift:setVector("$color2", Vector(0.5, 0.5, 0.5))
+
+local matGlow = material.create("UnlitGeneric")
+matGlow:setTexture("$basetexture", "sprites/light_glow02")
+matGlow:setInt("$flags", 16 + 32 + 128 + 8192)
+
+---------------- OBJ helpers ----------------
+local function parseOBJ(body)
+    local V, VT, VN, FL = {}, {}, {}, {}
+    local pos, len, cnt = 1, #body, 0
+    while pos <= len do
+        local e = string.find(body, "\n", pos, true) or (len + 1)
+        local line = string.sub(body, pos, e - 1)
+        pos = e + 1
+        if string.sub(line, -1) == "\r" then line = string.sub(line, 1, -2) end
+        if string.sub(line, 1, 2) == "v " then
+            local w = splitPlain(line, " ")
+            V[#V + 1] = Vector(tonumber(w[2]) or 0, tonumber(w[3]) or 0, tonumber(w[4]) or 0)
+        elseif string.sub(line, 1, 3) == "vt " then
+            local w = splitPlain(line, " ")
+            VT[#VT + 1] = { tonumber(w[2]) or 0, tonumber(w[3]) or 0 }
+        elseif string.sub(line, 1, 3) == "vn " then
+            local w = splitPlain(line, " ")
+            VN[#VN + 1] = Vector(tonumber(w[2]) or 0, tonumber(w[3]) or 0, tonumber(w[4]) or 1)
+        elseif string.sub(line, 1, 2) == "f " then
+            FL[#FL + 1] = line
+        end
+        cnt = cnt + 1
+        if cnt % 2500 == 0 then pace() end
+    end
+    return V, VT, VN, FL
+end
+
+local function boundsOf(V)
+    local mn, mx = Vector(1e9, 1e9, 1e9), Vector(-1e9, -1e9, -1e9)
+    for i = 1, #V do
+        local p = V[i]
+        mn = Vector(math.min(mn.x, p.x), math.min(mn.y, p.y), math.min(mn.z, p.z))
+        mx = Vector(math.max(mx.x, p.x), math.max(mx.y, p.y), math.max(mx.z, p.z))
+        if i % 4000 == 0 then pace() end
+    end
+    return mn, mx
+end
+
+local function rotAll(V, VN, ang)
+    for i = 1, #V do
+        V[i]:rotate(ang)
+        if i % 4000 == 0 then pace() end
+    end
+    for i = 1, #VN do VN[i]:rotate(ang) end
+end
+
+local function makeTris(V, VT, VN, FL)
+    local tris = {}
+    for fi = 1, #FL do
+        local w = splitPlain(FL[fi], " ")
+        local cs = {}
+        for j = 2, #w do
+            local a = splitKeep(w[j], "/")
+            local vi, ti, ni = tonumber(a[1]), tonumber(a[2]), tonumber(a[3])
+            if vi and vi < 0 then vi = #V + vi + 1 end
+            if ti and ti < 0 then ti = #VT + ti + 1 end
+            if ni and ni < 0 then ni = #VN + ni + 1 end
+            local pv = vi and V[vi]
+            if pv then
+                local uv = ti and VT[ti]
+                cs[#cs + 1] = { p = pv, n = ni and VN[ni] or nil, u = uv and uv[1] or 0, v = uv and (1 - uv[2]) or 0 }
+            end
+        end
+        for j = 2, #cs - 1 do
+            local c1, c2, c3 = cs[1], cs[j], cs[j + 1]
+            local fn
+            if not (c1.n and c2.n and c3.n) then
+                fn = (c2.p - c1.p):cross(c3.p - c1.p)
+                if fn:getLength() > 0 then fn = fn:getNormalized() else fn = Vector(0, 0, 1) end
+            end
+            for _, c in ipairs({ c1, c2, c3 }) do
+                tris[#tris + 1] = { pos = c.p, normal = c.n or fn, u = c.u, v = c.v }
+            end
+        end
+        if fi % 1500 == 0 then pace() end
+    end
+    return tris
+end
+
+---------------- shields (directional force shield model) ----------------
+local function newShield()
+    local mm = material.create("UnlitGeneric")           -- main texture, uses its alpha channel
+    mm:setTextureURL("$basetexture", SHIELD_TEX_URL)
+    mm:setInt("$flags", 8192 + 2097152)                  -- nocull + translucent
+    mm:setFloat("$alpha", 0)
+    local me = material.create("UnlitGeneric")           -- emissive layer, additive
+    me:setTextureURL("$basetexture", SHIELD_EMI_URL)
+    me:setInt("$flags", 16 + 32 + 128 + 8192)
+    me:setVector("$color2", Vector(0, 0, 0))
+    return {
+        mm = mm, me = me, h1 = nil, h2 = nil,
+        on = false, v = 0, op = 0.5, prox = 0.5, holdT = 0,
+        yaw = 0, pitch = 0, tyaw = 0, tpitch = 0,
+        flash = 0, hid = true, cpos = nil, dist = 50,
+    }
+end
+shP, shD = newShield(), newShield()
+
+local lastHitFx = 0
+local function hitFx(pos, dir)
+    local now = timer.curtime()
+    if now - lastHitFx < 0.07 then return end
+    lastHitFx = now
+    pcall(function()
+        sndHolo:setPos(pos)
+        sndHolo:emitSound(HIT_SOUNDS[math.random(#HIT_SOUNDS)], 75, math.random(95, 115), HIT_VOLUME)
+    end)
+    if HIT_EFFECT then
+        pcall(function()
+            local fx = effect.create()
+            fx:setOrigin(pos)
+            fx:setNormal(dir)
+            fx:setMagnitude(1)
+            fx:setScale(1)
+            fx:play(HIT_EFFECT)
+        end)
+    end
+end
+
+-- turn a shield on / off (activation flash in front of the owner)
+local function setOn(S, v)
+    if S.on == v then return end
+    S.on = v
+    if v then
+        S.tyaw = (S == shP) and ME:getEyeAngles().y or DR.yaw
+        S.tpitch = 0
+        if S.v < 0.05 then S.yaw, S.pitch = S.tyaw, 0 end
+        S.holdT = timer.curtime() + SHIELD_BOOT_TIME
+        S.prox = 0.6
+    else
+        S.holdT = 0
+    end
+end
+
+-- a threat message arrived: rotate toward it and show the shield
+local function shieldThreat(S, dir, prox, hit)
+    if not S.on then return end
+    local a = dir:getAngle()
+    S.tyaw, S.tpitch = a.y, clamp(a.p, -80, 80)
+    if S.v < 0.04 then S.yaw, S.pitch = S.tyaw, S.tpitch end
+    S.holdT = timer.curtime() + SHIELD_HOLD
+    S.prox = prox
+    if hit then
+        S.flash = 1
+        if S.cpos then hitFx(S.cpos + dir * S.dist, dir) end
+    end
+end
+
+net.receive("dr_thr", function()
+    local kind = net.readUInt(2)
+    local dir = net.readVector()
+    local prox = net.readFloat()
+    local hit = net.readBool()
+    shieldThreat(kind == 1 and shP or shD, dir, prox, hit)
+end)
+
+local function updShield(S, dt, now, center, dist, width)
+    if not S.h1 then return end
+    local threat = S.on and now < S.holdT
+    S.v = approach(S.v, threat and 1 or 0, dt / (threat and SHIELD_FADE_IN or SHIELD_FADE_OUT))
+    S.flash = math.max(0, S.flash - dt * 3.5)
+    S.cpos, S.dist = center, dist
+    if S.v <= 0.002 then
+        if not S.hid then S.h1:setNoDraw(true) S.h2:setNoDraw(true) S.hid = true end
+        return
+    end
+    if S.hid then S.h1:setNoDraw(false) S.h2:setNoDraw(false) S.hid = false end
+
+    -- opacity follows how close the threat is
+    S.op = S.op + ((0.35 + 0.65 * S.prox) - S.op) * math.min(1, 10 * dt)
+
+    -- smooth rotation around the pivot
+    local f = math.min(1, SHIELD_TURN * dt)
+    S.yaw = S.yaw + angDiff(S.tyaw, S.yaw) * f
+    S.pitch = S.pitch + (S.tpitch - S.pitch) * f
+    local ang = Angle(S.pitch, S.yaw, 0)
+    local pos = center + ang:getForward() * dist
+
+    local e = ease(S.v)
+    local alpha = clamp(e * S.op + S.flash * 0.4, 0, 1)
+    local flick = 0.9 + 0.1 * math.sin(now * 31) + (math.random() < 0.03 and 0.2 or 0)
+    local b = clamp(SHIELD_BRIGHT * e * S.op * flick * (1 + S.flash * 1.6), 0, 3)
+    S.mm:setFloat("$alpha", alpha)
+    local col = Vector(b, b, b)
+    S.me:setVector("$color2", col)
+    S.me:setVector("$color", col)
+
+    local sc = width * (0.88 + 0.12 * e)
+    S.h1:setPos(pos)
+    S.h1:setAngles(ang)
+    S.h1:setScale(Vector(sc, sc, sc))
+    S.h2:setPos(pos)
+    S.h2:setAngles(ang)
+    S.h2:setScale(Vector(sc * 1.01, sc * 1.01, sc * 1.01))
+end
+
+local shObj, shMesh
+local function shieldJob()
+    local V, VT, VN, FL = parseOBJ(shObj)
+    local info = "manual"
+    if SHIELD_AUTO_AXIS then
+        local mn, mx = boundsOf(V)
+        local d = mx - mn
+        local ax = 1
+        if d.y < d.x and d.y <= d.z then ax = 2 elseif d.z < d.x and d.z < d.y then ax = 3 end
+        if ax == 2 then rotAll(V, VN, Angle(0, -90, 0)) elseif ax == 3 then rotAll(V, VN, Angle(90, 0, 0)) end
+        -- decide which side is "out": convex shells have most vertices behind the apex
+        mn, mx = boundsOf(V)
+        local sum = 0
+        if #VN > 0 then
+            for i = 1, #VN do sum = sum + VN[i].x end
+        else
+            local cx = (mn.x + mx.x) * 0.5
+            for i = 1, #V do sum = sum + (cx - V[i].x) end
+        end
+        local flipped = sum < 0
+        if flipped then rotAll(V, VN, Angle(0, 180, 0)) end
+        info = "thin axis " .. ({ "X", "Y", "Z" })[ax] .. (flipped and ", auto-flipped" or "")
+    end
+    if SHIELD_FLIP then rotAll(V, VN, Angle(0, 180, 0)) end
+    rotAll(V, VN, SHIELD_MODEL_ANG)
+
+    local mn, mx = boundsOf(V)
+    local size = mx - mn
+    local maxdim = math.max(size.x, size.y, size.z)
+    if maxdim <= 0 then print("[Drone] shield model is empty") return end
+    local ctr = (mn + mx) * 0.5
+    local s = 1 / maxdim
+    for i = 1, #V do V[i] = (V[i] - ctr) * s end
+
+    local tris = makeTris(V, VT, VN, FL)
+    shMesh = mesh.createFromTable(tris)
+    if not shMesh then print("[Drone] shield mesh creation failed") return end
+
+    for _, S in ipairs({ shP, shD }) do
+        S.h1 = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(1, 1, 1))
+        S.h1:setMesh(shMesh)
+        S.h1:setMeshMaterial(S.mm)
+        S.h1:setNoDraw(true)
+        S.h2 = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(1, 1, 1))
+        S.h2:setMesh(shMesh)
+        S.h2:setMeshMaterial(S.me)
+        S.h2:setNoDraw(true)
+        S.hid = true
+    end
+    if IS_OWNER then print("[Drone] shield model ready (" .. math.floor(#tris / 3) .. " tris, " .. info .. ")") end
+end
+
+http.get(SHIELD_OBJ_URL, function(body)
+    shObj = body
+    addJob(shieldJob)
+end, function(err) print("[Drone] shield OBJ download failed: " .. tostring(err)) end)
+
+---------------- drone OBJ build ----------------
+local objBody, theMesh
+local function buildJob()
+    local V, VT, VN, FL = parseOBJ(objBody)
+
+    rotAll(V, VN, MODEL_ANG)
+    local mn, mx = boundsOf(V)
+
+    local size = mx - mn
+    local maxdim = math.max(size.x, size.y, size.z)
+    local s = SCALE or (SIZE / maxdim)
+    local ctr = CENTER and (mn + mx) * 0.5 or Vector()
+    for i = 1, #V do V[i] = (V[i] - ctr) * s end
+    DR.top = (mx.z - ctr.z) * s
+    DR.bot = (mn.z - ctr.z) * s
+    DR.unit = maxdim * s
+    DR.fitHalf = DR.unit / 2
+
+    local tris = makeTris(V, VT, VN, FL)
+
+    if #tris > 65000 then print("[Drone] warning: mesh has " .. #tris .. " verts, may exceed the limit") end
+    theMesh = mesh.createFromTable(tris)
+    if not theMesh then print("[Drone] mesh creation failed") return end
+
+    local mats = { matBase, matEmi, matLift }
+    for i = 1, 3 do
+        local h = hologram.create(DR.pos, DR.ang, CUBE_MDL, Vector(1, 1, 1))
+        h:setMesh(theMesh)
+        h:setMeshMaterial(mats[i])
+        layers[i] = h
+    end
+    DR.ready = true
+    DR.appliedK = -1
+    if IS_OWNER then print("[Drone] model ready (" .. math.floor(#tris / 3) .. " tris)") end
+end
+
+http.get(OBJ_URL, function(body)
+    objBody = body
+    addJob(buildJob)
+end, function(err) print("[Drone] OBJ download failed: " .. tostring(err)) end)
+
+---------------- movement helpers ----------------
+local function springTo(target, dt, spring, damp)
+    DR.vel = DR.vel + ((target - DR.pos) * spring - DR.vel * damp) * dt
+    local sp = DR.vel:getLength()
+    if sp > MAX_SPEED then DR.vel = DR.vel * (MAX_SPEED / sp) end
+    DR.pos = DR.pos + DR.vel * dt
+end
+
+local function moveCollide(dt, mins, maxs)
+    local delta = DR.vel * dt
+    if delta:getLengthSqr() < 1e-6 then return end
+    local tr = trace.hull(DR.pos, DR.pos + delta, mins, maxs, ME)
+    if tr.StartSolid then DR.pos = DR.pos + delta return end
+    DR.pos = tr.HitPos
+    if tr.Fraction >= 1 then return end
+    local n = tr.HitNormal
+    local rem = delta * (1 - tr.Fraction)
+    rem = rem - n * rem:dot(n)
+    DR.vel = DR.vel - n * DR.vel:dot(n)
+    if rem:getLengthSqr() > 1e-6 then
+        local t2 = trace.hull(DR.pos, DR.pos + rem, mins, maxs, ME)
+        if not t2.StartSolid then DR.pos = t2.HitPos end
+    end
+end
+
+local function orient(dt, yawT, pitchT, tiltScale)
+    local f = math.min(1, AIM_TURN * dt)
+    DR.yaw = DR.yaw + angDiff(yawT, DR.yaw) * f
+    DR.aimPitch = DR.aimPitch + (pitchT - DR.aimPitch) * f
+    local ya = Angle(0, DR.yaw, 0)
+    local tp = clamp(DR.vel:dot(ya:getForward()) * 0.012, -14, 14) * tiltScale
+    local tr = clamp(DR.vel:dot(ya:getRight()) * 0.012, -14, 14) * tiltScale
+    local g = math.min(1, 6 * dt)
+    DR.tiltP = DR.tiltP + (tp - DR.tiltP) * g
+    DR.tiltR = DR.tiltR + (tr - DR.tiltR) * g
+    DR.ang = Angle(DR.aimPitch + DR.tiltP, DR.yaw, DR.tiltR)
+end
+
+local function readMove()
+    local f = (down(KEY_W) and 1 or 0) - (down(KEY_S) and 1 or 0)
+    local r = (down(KEY_D) and 1 or 0) - (down(KEY_A) and 1 or 0)
+    local u = (down(KEY_SPACE) and 1 or 0) - (down(KEY_CTRL) and 1 or 0)
+    return f, r, u, down(KEY_SHIFT)
+end
+
+-- direction comes from the real camera angles (works while seated)
+local function wishVel(speed, boostMul)
+    local f, r, u, boost = readMove()
+    local eye = DR.viewAng
+    local wish = eye:getForward() * f + eye:getRight() * r + Vector(0, 0, u)
+    local l = wish:getLength()
+    if l > 1 then wish = wish * (1 / l) end
+    return wish * (speed * (boost and boostMul or 1)), eye
+end
+
+local function seatPos() return DR.pos + Vector(0, 0, DR.top * DR.k) + RIDE_SEAT_OFF end
+
+local function rideHull()
+    local k = DR.k
+    local r = math.max(30, DR.fitHalf * k * 0.6)
+    return Vector(-r, -r, DR.bot * k), Vector(r, r, DR.top * k + RIDE_SEAT_OFF.z + RIDE_RIDER_H)
+end
+
+---------------- mode steps ----------------
+local function followStep(dt)
+    local eye = ME:getEyeAngles()
+    local fa = Angle(0, eye.y, 0)
+    local bob = math.sin(timer.curtime() * 1.7) * BOB_AMOUNT
+    local target = ME:getPos() + fa:getForward() * (-FOLLOW_BACK) + fa:getRight() * FOLLOW_SIDE + Vector(0, 0, HOVER_HEIGHT + bob)
+    if (DR.pos - target):getLength() > TELEPORT_DIST then DR.pos = target DR.vel = Vector() end
+    springTo(target, dt, SPRING, DAMP)
+
+    local yawT, pitchT = eye.y, 0
+    if FACE_AIM then
+        local es = ME:getEyePos()
+        local tr = trace.line(es, es + eye:getForward() * AIM_RANGE, ME)
+        local d = tr.HitPos - DR.pos
+        local l = d:getLength()
+        if l > AIM_MIN_DIST then
+            yawT = math.deg(math.atan2(d.y, d.x))
+            pitchT = clamp(math.deg(math.asin(clamp(-d.z / l, -1, 1))), -35, 35)
+        end
+    end
+    orient(dt, yawT, pitchT, 1)
+end
+
+local function controlStep(dt)
+    local wv, eye = wishVel(CONTROL_SPEED, CONTROL_BOOST)
+    DR.vel = DR.vel + (wv - DR.vel) * math.min(1, FLY_ACCEL * dt)
+    local r = math.max(8, DR.fitHalf * DR.k * 0.5)
+    moveCollide(dt, Vector(-r, -r, -r), Vector(r, r, r))
+    local off = DR.pos - DR.holdPos
+    if off:getLength() > CONTROL_RANGE then
+        DR.pos = DR.holdPos + off:getNormalized() * CONTROL_RANGE
+        DR.vel = Vector()
+    end
+    orient(dt, eye.y, eye.p * 0.9, 1)
+end
+
+local function finishLanding()
+    local so = seatPos()
+    local tr = trace.line(so, so - Vector(0, 0, 800), ME)
+    local fp = tr.Hit and (tr.HitPos + Vector(0, 0, 2)) or so
+    endModes(true, fp)
+end
+
+local function rideStep(dt)
+    DR.stT = DR.stT + dt
+    if DR.stage == "enter" then
+        local k = DR.kT
+        local th = (DR.top - DR.bot) * k
+        local seatT
+        if DR.sub == "rise" then
+            seatT = DR.bodyStart + Vector(0, 0, th + RIDE_SEAT_OFF.z + 6)
+        else
+            seatT = DR.bodyStart + Vector(0, 0, 8)
+        end
+        local target = seatT - Vector(0, 0, DR.top * k) - RIDE_SEAT_OFF
+        springTo(target, dt, 26, 9)
+        orient(dt, DR.rideYaw, 0, 0.3)
+        local close = (DR.pos - target):getLength() < 10 and math.abs(DR.k - DR.kT) < 0.06
+
+        if DR.sub == "under" then
+            if (close and DR.stT > 0.8) or DR.stT > 5 then
+                DR.sub = "sit"
+                DR.stT = 0
+                unlockBody(0)                 -- let the seat take over
+                DR.seat = true
+                DR.netT = 0
+                sendSeat(2, seatPos(), Vector(), DR.rideYaw)
+            end
+        elseif DR.sub == "sit" then
+            if seated() then
+                DR.sub = "rise"
+                DR.stT = 0
+            elseif DR.stT > SEAT_WAIT then
+                print("[Drone] could not seat you, cancelled")
+                endModes(true)
+            end
+        elseif DR.sub == "rise" then
+            if ((DR.pos - target):getLength() < 6 and DR.stT > 0.5) or DR.stT > 4 then
+                DR.stage = "fly"
+                DR.stT = 0
+                local off = ME:getEyePos() - seatPos()
+                if seated() and off:getLength() < 120 then DR.eyeOff = off else DR.eyeOff = Vector(0, 0, RIDE_EYE_UP) end
+                DR.camStyle = "ride"
+                DR.camT = 1
+            end
+        end
+    elseif DR.stage == "fly" then
+        local wv, eye = wishVel(RIDE_SPEED, RIDE_BOOST)
+        DR.vel = DR.vel + (wv - DR.vel) * math.min(1, FLY_ACCEL * dt)
+        local mins, maxs = rideHull()
+        moveCollide(dt, mins, maxs)
+        -- the drone turns to face where your camera looks
+        orient(dt, eye.y, clamp(eye.p * RIDE_PITCH, -30, 30), 1)
+    elseif DR.stage == "land" then
+        DR.vel = DR.vel + (Vector(0, 0, -RIDE_LAND_SPEED) - DR.vel) * math.min(1, 4 * dt)
+        local mins, maxs = rideHull()
+        moveCollide(dt, mins, maxs)
+        orient(dt, DR.viewAng.y, clamp(DR.viewAng.p * RIDE_PITCH, -30, 30), 1)
+        local tr = trace.hull(DR.pos, DR.pos - Vector(0, 0, 4), mins, maxs, ME)
+        if (DR.stT > 0.4 and (tr.Hit or tr.StartSolid)) or DR.stT > 6 then finishLanding() end
+    end
+end
+
+-- other players: follow the owner's synced drone
+local function remoteStep(dt, now)
+    local fresh = (now - REM.t) < 1.5
+    if fresh and REM.mode ~= 0 then
+        local age = math.min(now - REM.t, 0.2)
+        local tp = REM.pos + REM.vel * age
+        DR.pos = DR.pos + (tp - DR.pos) * math.min(1, 14 * dt)
+        DR.vel = REM.vel
+        DR.ang = REM.ang
+        DR.yaw = REM.ang.y
+        DR.kT = REM.kT
+    else
+        followStep(dt)
+        DR.kT = fresh and REM.kT or 1
+    end
+end
+
+net.receive("dr_state", function()
+    local f = net.readUInt(4)
+    local m = net.readUInt(2)
+    local kT = net.readFloat()
+    local pos = net.readVector()
+    local vel = net.readVector()
+    local ap, ay, ar = net.readFloat(), net.readFloat(), net.readFloat()
+    if IS_OWNER then return end
+    setOn(shP, bit.band(f, 1) ~= 0)
+    setOn(shD, bit.band(f, 2) ~= 0)
+    REM.mode, REM.kT, REM.pos, REM.vel = m, kT, pos, vel
+    REM.ang = Angle(ap, ay, ar)
+    REM.t = timer.curtime()
+end)
+
+---------------- mode switches ----------------
+local function toggleControl()
+    if DR.mode == "follow" then
+        DR.mode = "control"
+        DR.stage = "run"
+        DR.stT = 0
+        DR.camStyle = "ctrl"
+        DR.camT = 1
+        DR.kT = 1
+        DR.bodyStart = ME:getPos()
+        DR.holdPos = DR.bodyStart
+        lockBody()
+        sfx(SND_CONTROL)
+    elseif DR.mode == "control" then
+        endModes(false)
+        sfx(SND_CONTROL)
+    else
+        print("[Drone] land first (L)")
+    end
+    DR.snT = 0
+end
+
+local function toggleRide()
+    if DR.mode == "follow" then
+        DR.mode = "ride"
+        DR.stage = "enter"
+        DR.sub = "under"
+        DR.stT = 0
+        DR.bodyStart = ME:getPos()
+        DR.rideYaw = ME:getEyeAngles().y
+        DR.kT = RIDE_SIZE / DR.unit
+        lockBody()
+        sfx(SND_RIDE)
+    elseif DR.mode == "ride" and DR.stage == "fly" then
+        DR.stage = "land"
+        DR.stT = 0
+        sfx(SND_RIDE)
+    elseif DR.mode == "ride" then
+        print("[Drone] wait until you are seated")
+    elseif DR.mode == "control" then
+        print("[Drone] leave the drone camera first (K)")
+    end
+    DR.snT = 0
+end
+
+if IS_OWNER then
+    hook.add("inputPressed", "dr_keys", function(key)
+        if chatOpen() then return end
+        if key == KEY_SHIELD_P then
+            setOn(shP, not shP.on)
+            sfx(SND_SHIELD_P)
+            DR.snT = 0
+        elseif key == KEY_SHIELD_D then
+            setOn(shD, not shD.on)
+            sfx(SND_SHIELD_D)
+            DR.snT = 0
+        elseif key == KEY_CONTROL then
+            toggleControl()
+        elseif key == KEY_RIDE then
+            toggleRide()
+        end
+    end)
+
+    ---------------- input lock fallback (uses whatever CUserCmd methods exist) ----------------
+    local cmdWarned = false
+    hook.add("createmove", "dr_lock", function(cmd)
+        if not DR.lock or not cmd then return end
+        local did = false
+        pcall(function()
+            local function try(name, ...)
+                local f = cmd[name]
+                if f then
+                    local ok = pcall(f, cmd, ...)
+                    if ok then did = true end
+                end
+            end
+            try("clearMovement")
+            try("clearButtons")
+            try("setForwardMove", 0)
+            try("setSideMove", 0)
+            try("setUpMove", 0)
+        end)
+        if not did and not cmdWarned then
+            cmdWarned = true
+            print("[Drone] createmove has no usable methods here (relying on lockControls + server freeze)")
+        end
+    end)
+
+    ---------------- camera ----------------
+    hook.add("calcview", "dr_cam", function(pos, ang, fov, znear, zfar)
+        DR.viewAng = Angle(ang.p, ang.y, ang.r)
+        if DR.camBlend <= 0.001 then return end
+        local target, showSelf
+        if DR.camStyle == "ctrl" then
+            target = DR.pos + ang:getForward() * (CTRL_CAM_FWD * DR.k)
+            showSelf = DR.camBlend > 0.3
+        else
+            target = seatPos() + DR.eyeOff
+            showSelf = false
+        end
+        local o = pos + (target - pos) * ease(DR.camBlend)
+        return { origin = o, angles = ang, fov = fov, znear = znear, zfar = zfar, drawviewer = showSelf }
+    end)
+
+    ---------------- HUD ----------------
+    local hudFont = render.createFont("Roboto", 22, 600, true)
+    hook.add("drawhud", "dr_hud", function()
+        local txt
+        if DR.mode == "control" and DR.camBlend > 0.3 then
+            txt = "DRONE CAM   [K] exit   WASD move   SPACE/CTRL up/down   SHIFT boost   range "
+                .. math.floor((DR.pos - DR.holdPos):getLength())
+        elseif DR.mode == "ride" and DR.stage == "fly" then
+            txt = "RIDE   [L] land   speed " .. math.floor(DR.vel:getLength())
+        elseif DR.mode == "ride" and DR.sub == "sit" then
+            txt = "Seating... (if nothing happens look down and press E on the seat)"
+        else
+            return
+        end
+        local w, h = render.getResolution()
+        render.setFont(hudFont)
+        render.setColor(SPARK_COLOR)
+        local cx, cy = w / 2, h / 2
+        if DR.mode == "control" then
+            render.drawLine(cx - 16, cy, cx - 5, cy)
+            render.drawLine(cx + 5, cy, cx + 16, cy)
+            render.drawLine(cx, cy - 16, cx, cy - 5)
+            render.drawLine(cx, cy + 5, cx, cy + 16)
+        end
+        render.drawSimpleText(cx, h - 60, txt, 1, 1)
+    end)
+end
+
+---------------- sparks (sprites only) ----------------
+local SP = { nextT = nil, t0 = 0, active = false, arcs = {}, reroll = 0 }
+local camR, camU = Vector(0, 1, 0), Vector(0, 0, 1)
+
+local function randDir()
+    local z = math.random() * 2 - 1
+    local a = math.random() * math.pi * 2
+    local r = math.sqrt(1 - z * z)
+    return Vector(r * math.cos(a), r * math.sin(a), z)
+end
+
+local function newArc()
+    local R = DR.fitHalf
+    local s = randDir() * R * rnd(0.35, 1)
+    local e = s + randDir() * R * rnd(0.7, 1.6)
+    local pts, n = {}, SPARK_SEGMENTS
+    for i = 0, n do
+        local t = i / n
+        local p = s + (e - s) * t
+        if i > 0 and i < n then p = p + randDir() * R * 0.18 * (1 - math.abs(t - 0.5) * 0.8) end
+        pts[#pts + 1] = p
+    end
+    return pts
+end
+
+local function startBurst(now)
+    SP.active = true
+    SP.t0 = now
+    SP.arcs = {}
+    for i = 1, math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX) do SP.arcs[i] = newArc() end
+    SP.reroll = now + rnd(0.04, 0.09)
+    SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)
+    pcall(function()
+        anchor:emitSound(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)], 75, math.random(95, 110), SPARK_VOLUME)
+    end)
+end
+
+local function sprite(p, s)
+    local r, u = camR * (s * 0.5), camU * (s * 0.5)
+    render.draw3DQuad(p - r + u, p + r + u, p + r - u, p - r - u)
+end
+
+local function toWorld(v)
+    local w = Vector(v.x, v.y, v.z) * DR.k
+    w:rotate(DR.ang)
+    return w + DR.pos
+end
+
+hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
+    if depth or sky or not SP.active or DR.hidden then return end
+    local now = timer.curtime()
+    local t = (now - SP.t0) / SPARK_DURATION
+    if t >= 1 then return end
+    local fade = 1 - t * t
+    local ea = render.eyeAngles and render.eyeAngles() or DR.viewAng
+    camR, camU = ea:getRight(), ea:getUp()
+    local u = DR.unit * DR.k
+
+    render.setMaterial(matGlow)
+    local fl = 0.6 + 0.4 * math.random()
+    render.setColor(Color(SPARK_COLOR.r, SPARK_COLOR.g, SPARK_COLOR.b, 40 * fade * fl))
+    sprite(DR.pos, u * 1.6)
+
+    for _, pts in ipairs(SP.arcs) do
+        local wp = {}
+        for i = 1, #pts do wp[i] = toWorld(pts[i]) end
+        for i = 1, #wp do
+            local f = 0.6 + 0.4 * math.random()
+            render.setColor(Color(SPARK_COLOR.r, SPARK_COLOR.g, SPARK_COLOR.b, 90 * fade * f))
+            sprite(wp[i], u * 0.35)
+        end
+        for i = 1, #wp do
+            local f = 0.6 + 0.4 * math.random()
+            render.setColor(Color(SPARK_CORE.r, SPARK_CORE.g, SPARK_CORE.b, 230 * fade * f))
+            sprite(wp[i], u * 0.12)
+        end
+        render.setColor(Color(SPARK_CORE.r, SPARK_CORE.g, SPARK_CORE.b, 200 * fade))
+        sprite(wp[1], u * 0.7)
+        sprite(wp[#wp], u * 0.7)
+    end
+end)
+
+---------------- main loop ----------------
+local lastT = timer.curtime()
+hook.add("think", "dr_think", function()
+    local now = timer.curtime()
+    local dt = math.min(now - lastT, 0.05)
+    lastT = now
+    if dt <= 0 then return end
+
+    if IS_OWNER then
+        if DR.mode ~= "follow" and not ME:isAlive() then endModes(true) end
+
+        if DR.mode == "follow" then followStep(dt)
+        elseif DR.mode == "control" then controlStep(dt)
+        else rideStep(dt) end
+
+        DR.camBlend = approach(DR.camBlend, DR.camT, dt / CAM_BLEND_TIME)
+
+        -- seat keep-alive / position stream
+        if DR.seat then
+            DR.netT = DR.netT - dt
+            if DR.netT <= 0 then
+                DR.netT = (DR.mode == "ride") and NET_RATE_RIDE or NET_RATE_CTRL
+                sendSeat(3, seatPos(), DR.vel, 0)
+            end
+        end
+
+        -- body freeze keep-alive
+        if DR.lock then
+            DR.lkT = DR.lkT - dt
+            if DR.lkT <= 0 then
+                DR.lkT = NET_RATE_CTRL
+                sendCtl(1, DR.bodyStart)
+            end
+        end
+
+        -- state broadcast for other players (also feeds the server shield logic)
+        DR.snT = DR.snT - dt
+        if DR.snT <= 0 then
+            DR.snT = STATE_RATE
+            sendState()
+        end
+    else
+        remoteStep(dt, now)
+    end
+
+    -- size
+    DR.k = DR.k + (DR.kT - DR.k) * math.min(1, SIZE_RATE * dt)
+    if math.abs(DR.kT - DR.k) < 0.002 then DR.k = DR.kT end
+
+    -- drone holograms
+    anchor:setPos(DR.pos)
+    local hide = IS_OWNER and CTRL_HIDE_DRONE and DR.mode == "control" and DR.camStyle == "ctrl" and DR.camBlend > 0.8
+    if layers[1] then
+        if hide ~= DR.hidden then
+            for i = 1, #layers do layers[i]:setNoDraw(hide) end
+        end
+        for i = 1, #layers do
+            layers[i]:setPos(DR.pos)
+            layers[i]:setAngles(DR.ang)
+        end
+        if math.abs(DR.k - DR.appliedK) > 0.0003 then
+            DR.appliedK = DR.k
+            local v = Vector(DR.k, DR.k, DR.k)
+            layers[1]:setScale(v)
+            layers[2]:setScale(v)
+            layers[3]:setScale(v * 1.012)
+        end
+    end
+    DR.hidden = hide
+
+    -- shields (pivot = center of the player / center of the drone)
+    local riding
+    if IS_OWNER then
+        riding = DR.mode == "ride" and (DR.stage == "fly" or DR.stage == "land")
+    else
+        riding = REM.mode == 2 and (now - REM.t) < 1.5
+    end
+    local pc
+    if riding then pc = seatPos() + Vector(0, 0, 26) else pc = ME:getPos() + Vector(0, 0, 36) end
+    updShield(shP, dt, now, pc, SHIELD_P_DIST, SHIELD_P_WIDTH)
+    local du = DR.unit * DR.k
+    updShield(shD, dt, now, DR.pos, du * SHIELD_D_DIST, du * SHIELD_D_WIDTH)
+
+    -- sparks timing
+    if DR.ready and not SP.nextT then SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY) end
+    if SP.nextT and now >= SP.nextT then startBurst(now) end
+    if SP.active then
+        if now > SP.t0 + SPARK_DURATION then
+            SP.active = false
+        elseif now >= SP.reroll then
+            for i = 1, #SP.arcs do
+                if math.random() < 0.6 then SP.arcs[i] = newArc() end
+            end
+            SP.reroll = now + rnd(0.04, 0.09)
+        end
+    end
+end)
+
+end -- CLIENT
