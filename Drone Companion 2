@@ -1922,10 +1922,7 @@ end
 local glowMat = material.load("sprites/light_glow02_add") or sparkFlatMat(16 + 32 + 128 + 8192)
 
 local toWorld
-local function drawSparks(now)
-    if not SP.active then return end
-    local fade = clamp((SP.endT - now) / (SPARK_DURATION * 0.35), 0, 1)
-    local unit = DR.unit * DR.k
+local function drawSparkArcs(arcs, fade, unit)
     local step = math.max(unit * 0.04, 0.3)
     local glowSz = unit * 0.12
     local coreSz = unit * 0.045
@@ -1935,7 +1932,7 @@ local function drawSparks(now)
     local pulseColor = Color(SPARK_COLOR.r * pulse, SPARK_COLOR.g * pulse, SPARK_COLOR.b * pulse, 255)
     render.draw3DSprite(DR.pos, unit * 1.2, unit * 1.2, pulseColor)
 
-    for _, arc in ipairs(SP.arcs) do
+    for _, arc in ipairs(arcs) do
         local k = fade * arc.k
         local cg = Color(SPARK_COLOR.r * k, SPARK_COLOR.g * k, SPARK_COLOR.b * k, 255)
         local cc = Color(SPARK_CORE.r * k, SPARK_CORE.g * k, SPARK_CORE.b * k, 255)
@@ -1958,49 +1955,40 @@ local function drawSparks(now)
     end
 end
 
+local function drawSparks(now)
+    if not SP.active then return end
+    local fade = clamp((SP.endT - now) / (SPARK_DURATION * 0.35), 0, 1)
+    drawSparkArcs(SP.arcs, fade, DR.unit * DR.k)
+end
+
+local CHARGE_SP = { flick = 0, arcs = {} }
+local function isCharging(now)
+    return (IS_OWNER and DR.charging)
+        or (not IS_OWNER and REM.mode == 2 and REM.charging and now - REM.t < 1.5)
+end
+
+local function updateChargeSparks(now)
+    if not DR.ready or not isCharging(now) then
+        CHARGE_SP.flick = 0
+        CHARGE_SP.arcs = {}
+        return
+    end
+    if now >= CHARGE_SP.flick then
+        CHARGE_SP.flick = now + 0.04 + math.random() * 0.05
+        CHARGE_SP.arcs = {}
+        local n = math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX)
+        for i = 1, n do CHARGE_SP.arcs[#CHARGE_SP.arcs + 1] = makeArc() end
+    end
+end
+
+local function drawChargeSparks(now)
+    if not isCharging(now) or #CHARGE_SP.arcs == 0 then return end
+    drawSparkArcs(CHARGE_SP.arcs, 1, DR.unit * DR.k)
+end
+
 local matBeam = material.create("UnlitGeneric")
 matBeam:setTexture("$basetexture", "effects/laser1")
 matBeam:setInt("$flags", 16 + 32 + 128 + 8192)
-local matLightningSprite = material.create("UnlitGeneric")
-matLightningSprite:setTexture("$basetexture", "sprites/lgtning")
-matLightningSprite:setInt("$flags", 16 + 32 + 128 + 8192)
-local matLightningNoZ = material.create("UnlitGeneric")
-matLightningNoZ:setTexture("$basetexture", "sprites/lgtning_noz")
-matLightningNoZ:setInt("$flags", 16 + 32 + 128 + 8192)
-local function spriteLightning(a, b, width, col, pieces, phase)
-    local delta = b - a
-    local length = delta:getLength()
-    if length < 0.5 then
-        pcall(function()
-            render.setMaterial(matLightningSprite)
-            render.draw3DSprite(a, width, width * 2, col)
-        end)
-        return
-    end
-    local side = Vector(-delta.y, delta.x, 0)
-    if side:getLengthSqr() < 0.001 then side = Vector(0, 1, 0) end
-    side = side:getNormalized()
-    local prev = a
-    for i = 1, pieces do
-        local t = i / pieces
-        local point = a + delta * t
-        if i < pieces then
-            local wave = (i + phase) * 2.4
-            point = point + side * (math.sin(wave) * width * 0.55)
-                + Vector(0, 0, math.cos(wave * 1.37) * width * 0.28)
-        end
-        local mid = (prev + point) * 0.5
-        local segLen = (point - prev):getLength()
-        local core = Color(230, 250, 255, col.a)
-        pcall(function()
-            render.setMaterial(matLightningSprite)
-            render.draw3DSprite(mid, math.max(3, width), math.max(6, segLen * 1.8), col)
-            render.setMaterial(matLightningNoZ)
-            render.draw3DSprite(point, math.max(2, width * 0.42), math.max(4, width * 1.1), core)
-        end)
-        prev = point
-    end
-end
 
 local function beam(a, b, width, col)
     local ok = pcall(function()
@@ -2077,20 +2065,7 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
 
     if not DR.hidden then drawSparks(now) end
 
-    -- Charge rods: branching, jagged light arcs point outward around the hull.
-    local charging = (IS_OWNER and DR.charging) or (not IS_OWNER and REM.mode == 2 and REM.charging and now - REM.t < 1.5)
-    local charge = IS_OWNER and clamp((now - DR.chargeT) / PULSE_CHARGE_TIME, 0, 1) or REM.charge
-    if charging then
-        local radius = DR.unit * DR.k * 0.62
-        for rod = 1, 12 do
-            local a = (rod / 12) * math.pi * 2 + now * 3
-            local base = DR.pos + Vector(math.cos(a) * radius * 0.58, math.sin(a) * radius * 0.58, math.sin(a * 2) * radius * 0.25)
-            local tip = DR.pos + Vector(math.cos(a) * radius * (1.1 + charge * 0.25), math.sin(a) * radius * (1.1 + charge * 0.25), math.sin(a * 3 + now * 6) * radius * 0.8)
-            local mid = (base + tip) * 0.5 + Vector(math.sin(now * 19 + rod) * radius * 0.14, math.cos(now * 17 + rod) * radius * 0.14, math.sin(now * 23 + rod) * radius * 0.14)
-            spriteLightning(base, mid, math.max(5, radius * 0.07), Color(25, 190, 255, 240), 4, rod + now * 8)
-            spriteLightning(mid, tip, math.max(4, radius * 0.045), Color(175, 245, 255, 250), 4, rod + now * 11)
-        end
-    end
+    drawChargeSparks(now)
 
     -- Strong full-length pulse beam: blue glow shell, cyan body, white-hot core.
     if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.42 then
@@ -2233,6 +2208,7 @@ hook.add("think", "dr_think", function()
     updShield(shD, dt, now, DR.pos, du * SHIELD_D_DIST, du * SHIELD_D_WIDTH)
 
     updateSparks(now)
+    updateChargeSparks(now)
 end)
 
 end -- CLIENT
