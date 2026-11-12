@@ -1,0 +1,996 @@
+--@name Drone Companion
+--@author AkrioN
+--@shared
+
+----------------------------------------------------------------
+-- SETTINGS (globals on purpose, avoids the 200 locals limit)
+----------------------------------------------------------------
+OBJ_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/2kdrone.obj"
+BASE_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/Scene_-_Root.png"
+EMI_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/emissiveMap1.png"
+
+SIZE      = 40            -- auto-fit: biggest dimension of the drone in units
+SCALE     = nil           -- set a number to override auto-fit
+MODEL_ANG = Angle(0, -90, 0)
+FLIP_V    = true          -- flip texture V (set false if textures look upside down)
+TEX_SIZE  = 1024
+
+BASE_BRIGHTNESS = 1.3     -- brightness of the lit base texture
+LIFT            = 0.15    -- extra additive copy of base texture (0 = off)
+
+-- follow
+FOLLOW_BACK  = 8
+FOLLOW_SIDE  = 32
+HOVER_HEIGHT = 62
+BOB_AMOUNT   = 3
+SPRING       = 60
+DAMP         = 11
+
+-- aiming
+AIM_TURN     = 12         -- how fast the drone turns toward your aim point
+AIM_MIN_DIST = 80         -- if the aim point is closer than this, use your view direction instead
+
+-- barrels (model space), picked with the !inspect tool
+TURRETS = {
+    Vector(14.81, 12.58, 1.89),
+    Vector(-14.81, 12.58, 1.89),
+    Vector(11.64, 12.49, 1.88),
+    Vector(-11.64, 12.49, 1.88),
+    Vector(14.86, 12.78, -2.33),
+    Vector(-14.86, 12.78, -2.33),
+    Vector(11.54, 12.56, -2.46),
+    Vector(-11.54, 12.56, -2.46),
+}
+
+-- combat
+DAMAGE       = 5          -- per bolt (one bolt per barrel per volley, so 8 barrels = 40 per volley)
+RANGE        = 6000
+FIRE_DELAY   = 0.15
+SPREAD       = 0.006
+MAX_CONE_DEG = 60
+BARREL_DIR   = Vector(0, 1, 0)   -- model +Y
+
+-- keys (numbers: G=17 H=18 J=20 K=21)
+FIRE_KEY      = 17   -- hold to fire
+PICK_KEY      = 18   -- H : pick
+PICK_SAVE_KEY = 20   -- J : pick + save
+PICK_MIR_KEY  = 21   -- K : pick + save + mirror
+
+-- visuals
+BEAM_MAT    = "trails/laser"
+BOLT_COLOR  = Color(0, 220, 255)
+BOLT_SPEED  = 5000
+BOLT_LENGTH = 80
+BOLT_WIDTH  = 3
+FLASH_TIME  = 0.07
+GMOD_EFFECTS = true
+SND_VOLUME  = 0.6
+FIRE_SNDS = { "weapons/airboat/airboat_gun_energy1.wav", "weapons/airboat/airboat_gun_energy2.wav" }
+
+CUBE_MDL   = "models/hunter/blocks/cube025x025x025.mdl"
+
+----------------------------------------------------------------
+-- SERVER
+----------------------------------------------------------------
+if SERVER then
+    local lastFire = 0
+    local warned = false
+    local cosCone = math.cos(math.rad(MAX_CONE_DEG))
+
+    net.receive("drone_fire", function(_, ply)
+        local eyePos = net.readVector()
+        local eyeDir = net.readVector()
+        local bdir   = net.readVector()
+        local n      = net.readUInt(5)
+        local muz = {}
+        for i = 1, n do muz[i] = net.readVector() end
+
+        if ply ~= owner() then return end
+        if n < 1 or n > 16 then return end
+        local now = timer.curtime()
+        if now - lastFire < FIRE_DELAY * 0.5 then return end
+        lastFire = now
+
+        -- validation
+        local sp = owner():getShootPos()
+        if sp:getDistance(eyePos) > 200 then return end
+        for i = 1, n do
+            if sp:getDistance(muz[i]) > 1000 then return end
+        end
+        eyeDir = eyeDir:getNormalized()
+        bdir = bdir:getNormalized()
+
+        local filter = { owner(), chip() }
+        local aim = trace.line(eyePos, eyePos + eyeDir * RANGE, filter)
+        local target = aim.Hit and aim.HitPos or (eyePos + eyeDir * RANGE)
+
+        net.start("drone_shots")
+        net.writeUInt(n, 5)
+        for i = 1, n do
+            local m = muz[i]
+            local d = (target - m):getNormalized()
+            if d:dot(bdir) < cosCone then d = bdir end
+            d = (d + Vector((math.random() * 2 - 1) * SPREAD, (math.random() * 2 - 1) * SPREAD, (math.random() * 2 - 1) * SPREAD)):getNormalized()
+
+            local tr = trace.line(m, m + d * RANGE, filter)
+            local kind = 0
+            if tr.Hit then
+                if tr.HitWorld then
+                    kind = 1
+                else
+                    kind = 2
+                    local ent = tr.Entity
+                    if isValid(ent) then
+                        local ok, err = pcall(function() ent:applyDamage(DAMAGE, owner(), chip()) end)
+                        if not ok and not warned then
+                            warned = true
+                            local msg = err
+                            if type(err) == "table" then msg = err.message or err.msg or tostring(err) end
+                            print("[drone] damage error: " .. tostring(msg))
+                        end
+                    end
+                end
+            end
+            net.writeVector(m)
+            net.writeVector(tr.HitPos)
+            net.writeVector(tr.HitNormal or Vector(0, 0, 1))
+            net.writeUInt(kind, 2)
+        end
+        net.send()
+    end)
+
+    -- relay chat commands to the owner's client (fallback if client chat hooks don't fire)
+    hook.add("playersay", "drone_relay", function(ply, text)
+        if ply == owner() and string.sub(text, 1, 1) == "!" then
+            net.start("drone_cmd")
+            net.writeString(text)
+            net.send(owner())
+        end
+    end)
+
+    return
+end
+
+----------------------------------------------------------------
+-- CLIENT
+----------------------------------------------------------------
+local ME = owner()
+local isOwnerClient = (player() == owner())
+
+local function say(msg)
+    if isOwnerClient then print("[drone] " .. msg) end
+end
+
+local errSeen = {}
+local function safe(tag, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok and not errSeen[tag] then
+        errSeen[tag] = true
+        local msg = err
+        if type(err) == "table" then msg = err.message or err.msg or tostring(err) end
+        say("error (" .. tag .. "): " .. tostring(msg))
+    end
+end
+
+local function clamp(v, a, b) if v < a then return a elseif v > b then return b end return v end
+local function angDiff(a, b) local d = (a - b) % 360 if d > 180 then d = d - 360 end return d end
+local function cpyV(v) return Vector(v.x, v.y, v.z) end
+
+-- quota helpers (works with old and new Starfall names)
+local cpuAvgFn = cpuAverage or quotaAverage or function() return 0 end
+local cpuMaxFn = cpuMax or quotaMax or function() return 1 end
+
+-- state
+local dpos  = ME:getPos() + Vector(0, 0, HOVER_HEIGHT)
+local dvel  = Vector(0, 0, 0)
+local dyaw  = ME:getEyeAngles().y
+local aimPitch = 0           -- pitch toward the aim point
+local dpitch, droll = 0, 0   -- small tilt from movement
+local dang  = Angle(0, 0, 0)
+local holoAng = Angle(0, 0, 0)
+local inspect = nil          -- {pos=Vector, ang=Angle}
+local chatOpen = false
+
+-- mesh / holograms
+local meshReady = false
+local layers = {}
+local holoMain = nil
+local triT, triG, triN = nil, nil, 0
+local GN, GB = {}, {}
+local fitMin, fitMax = Vector(), Vector()
+
+-- jobs (each job has its own "done" flag, so a clean finish is never reported as an error)
+local jobs = {}
+local function addJob(fn)
+    local j = { done = false }
+    j.co = coroutine.create(function()
+        fn()
+        j.done = true
+    end)
+    jobs[#jobs + 1] = j
+end
+local function pace()
+    if cpuAvgFn() > cpuMaxFn() * 0.5 then coroutine.yield() end
+end
+local function runJobs()
+    local j = jobs[1]
+    if not j then return end
+    local ok, err = coroutine.resume(j.co)
+    if j.done then
+        table.remove(jobs, 1)
+    elseif not ok then
+        say("job error: " .. type(err) .. " " .. tostring(err))
+        table.remove(jobs, 1)
+    elseif coroutine.status(j.co) == "dead" then
+        say("job died without finishing (status dead, no error given)")
+        table.remove(jobs, 1)
+    end
+end
+
+-- HUD (Starfall only fires the 3D render hooks when the HUD is enabled)
+local hudOn = false
+local function enableHudSafe()
+    if not isOwnerClient then return end
+    local ok, err = pcall(enableHud, player(), true)
+    if ok then
+        hudOn = true
+        say("HUD enabled (needed for bolts / markers)")
+    else
+        say("enableHud failed: " .. tostring(err))
+    end
+end
+enableHudSafe()
+
+-- materials
+local function flatMat(flags)
+    local m = material.create("UnlitGeneric")
+    m:setInt("$flags", flags)
+    m:setTexture("$basetexture", "vgui/white")
+    return m
+end
+local beamMat = material.load(BEAM_MAT) or flatMat(16 + 32 + 128 + 8192)
+local glowMat = material.load("sprites/light_glow02_add") or flatMat(16 + 32 + 128 + 8192)
+
+local matBase = material.create("VertexLitGeneric")
+matBase:setInt("$flags", 8192)
+matBase:setVector("$color2", Vector(BASE_BRIGHTNESS, BASE_BRIGHTNESS, BASE_BRIGHTNESS))
+matBase:setTextureURL("$basetexture", BASE_URL, function(m, url, w, h, layout)
+    if layout then layout(0, 0, TEX_SIZE, TEX_SIZE) end
+end)
+
+local matEmi = material.create("UnlitGeneric")
+matEmi:setInt("$flags", 8192 + 128)
+matEmi:setTextureURL("$basetexture", EMI_URL, function(m, url, w, h, layout)
+    if layout then layout(0, 0, TEX_SIZE, TEX_SIZE) end
+end)
+
+local matLift = material.create("UnlitGeneric")
+matLift:setInt("$flags", 8192 + 128)
+matLift:setVector("$color2", Vector(LIFT, LIFT, LIFT))
+matLift:setTextureURL("$basetexture", BASE_URL, function(m, url, w, h, layout)
+    if layout then layout(0, 0, TEX_SIZE, TEX_SIZE) end
+end)
+
+-- sprite helper: render.drawSprite doesn't exist here, so use draw3DSprite if available,
+-- otherwise fake a camera-facing glow with a beam
+local spriteMode = nil
+local function sprite(pos, size)
+    if spriteMode == nil then
+        spriteMode = (render.draw3DSprite and 1) or (render.drawSprite and 2) or 3
+    end
+    if spriteMode == 1 then
+        local ok = pcall(render.draw3DSprite, pos, size, size)
+        if ok then return end
+        spriteMode = 3
+    elseif spriteMode == 2 then
+        local ok = pcall(render.drawSprite, pos, size, size)
+        if ok then return end
+        spriteMode = 3
+    end
+    local up = ME:getEyeAngles():getUp()
+    local h = size * 0.5
+    render.draw3DBeam(pos - up * h, pos + up * h, size, 0, 1)
+end
+
+----------------------------------------------------------------
+-- OBJ LOADING (no regex patterns: plain find/sub only)
+----------------------------------------------------------------
+local turrets = {}
+for _, v in ipairs(TURRETS) do turrets[#turrets + 1] = cpyV(v) end
+
+local function createLayers(m)
+    local specs = { { matBase, true }, { matEmi, true } }
+    if LIFT > 0 then specs[#specs + 1] = { matLift, true } end
+    for i, s in ipairs(specs) do
+        local h = hologram.create(dpos, holoAng, CUBE_MDL)
+        h:setMesh(m)
+        h:setMeshMaterial(s[1])
+        layers[#layers + 1] = h
+        if i == 1 then holoMain = h end
+    end
+end
+
+-- split a line on spaces (plain find, skips empty words)
+local function splitSp(line)
+    local t, n, p, len = {}, 0, 1, #line
+    while p <= len do
+        local e = string.find(line, " ", p, true)
+        if not e then
+            n = n + 1
+            t[n] = string.sub(line, p)
+            break
+        end
+        if e > p then
+            n = n + 1
+            t[n] = string.sub(line, p, e - 1)
+        end
+        p = e + 1
+    end
+    return t, n
+end
+
+-- parse "a", "a/b", "a//c" or "a/b/c" without patterns
+local function parseCorner(tok)
+    local s1 = string.find(tok, "/", 1, true)
+    if not s1 then return tonumber(tok), nil, nil end
+    local a = tonumber(string.sub(tok, 1, s1 - 1))
+    local s2 = string.find(tok, "/", s1 + 1, true)
+    if not s2 then return a, tonumber(string.sub(tok, s1 + 1)), nil end
+    return a, tonumber(string.sub(tok, s1 + 1, s2 - 1)), tonumber(string.sub(tok, s2 + 1))
+end
+
+local function buildJob(body)
+    local px, py, pz = {}, {}, {}
+    local tu, tv = {}, {}
+    local nx, ny, nz = {}, {}, {}
+    local TVI, TTI, TNI, TG = {}, {}, {}, {}
+    local gids = {}
+    local curGroup = 1
+    GN = { "default" }
+    gids["default"] = 1
+    local cnt = 0
+
+    local pos = 1
+    local blen = #body
+    while pos <= blen do
+        local e = string.find(body, "\n", pos, true)
+        local line
+        if e then
+            line = string.sub(body, pos, e - 1)
+            pos = e + 1
+        else
+            line = string.sub(body, pos)
+            pos = blen + 1
+        end
+        if #line > 0 and string.byte(line, #line) == 13 then
+            line = string.sub(line, 1, #line - 1)
+        end
+
+        if #line > 0 then
+            if string.find(line, "\t", 1, true) then
+                line = string.gsub(line, "\t", " ")
+            end
+            local t, tn = splitSp(line)
+            local tag = t[1]
+            if tag == "v" then
+                local k = #px + 1
+                px[k], py[k], pz[k] = tonumber(t[2]), tonumber(t[3]), tonumber(t[4])
+            elseif tag == "vt" then
+                local k = #tu + 1
+                tu[k], tv[k] = tonumber(t[2]), tonumber(t[3])
+            elseif tag == "vn" then
+                local k = #nx + 1
+                nx[k], ny[k], nz[k] = tonumber(t[2]), tonumber(t[3]), tonumber(t[4])
+            elseif tag == "o" or tag == "g" then
+                local name = "default"
+                if tn >= 2 then name = table.concat(t, " ", 2, tn) end
+                if not gids[name] then
+                    GN[#GN + 1] = name
+                    gids[name] = #GN
+                end
+                curGroup = gids[name]
+            elseif tag == "f" then
+                local corners = {}
+                for i = 2, tn do
+                    local a, b, c = parseCorner(t[i])
+                    if a and a < 0 then a = #px + a + 1 end
+                    if b and b < 0 then b = #tu + b + 1 end
+                    if c and c < 0 then c = #nx + c + 1 end
+                    if a then corners[#corners + 1] = { a, b, c } end
+                end
+                for k = 2, #corners - 1 do
+                    local tri = { corners[1], corners[k], corners[k + 1] }
+                    local base = #TG * 3
+                    for q = 1, 3 do
+                        local cc = tri[q]
+                        TVI[base + q] = cc[1]
+                        TTI[base + q] = cc[2] or false
+                        TNI[base + q] = cc[3] or false
+                    end
+                    TG[#TG + 1] = curGroup
+                end
+            end
+        end
+        cnt = cnt + 1
+        if cnt % 150 == 0 then pace() end
+    end
+
+    if #px == 0 or #TG == 0 then say("OBJ has no geometry!") return end
+
+    local minx, miny, minz = math.huge, math.huge, math.huge
+    local maxx, maxy, maxz = -math.huge, -math.huge, -math.huge
+    for i = 1, #px do
+        local x, y, z = px[i], py[i], pz[i]
+        if x < minx then minx = x end if x > maxx then maxx = x end
+        if y < miny then miny = y end if y > maxy then maxy = y end
+        if z < minz then minz = z end if z > maxz then maxz = z end
+    end
+    local sx, sy, sz = maxx - minx, maxy - miny, maxz - minz
+    say(string.format("Drone raw size: %.3f x %.3f x %.3f  | %d tris, %d groups", sx, sy, sz, #TG, #GN))
+    local s = SCALE or (SIZE / math.max(sx, sy, sz))
+    local cx, cy, cz = (minx + maxx) / 2, (miny + maxy) / 2, (minz + maxz) / 2
+    fitMin = Vector((minx - cx) * s, (miny - cy) * s, (minz - cz) * s)
+    fitMax = Vector((maxx - cx) * s, (maxy - cy) * s, (maxz - cz) * s)
+
+    local hasN = #nx > 0
+    local hasT = #tu > 0
+    local verts, T = {}, {}
+    GB = {}
+    for t = 1, #TG do
+        local base = (t - 1) * 3
+        local P = {}
+        for q = 1, 3 do
+            local vi = TVI[base + q]
+            P[q] = Vector((px[vi] - cx) * s, (py[vi] - cy) * s, (pz[vi] - cz) * s)
+        end
+        local fn = (P[2] - P[1]):cross(P[3] - P[1])
+        local fl = fn:getLength()
+        if fl > 1e-9 then fn = fn * (1 / fl) else fn = Vector(0, 0, 1) end
+
+        local g = TG[t]
+        local gb = GB[g]
+        if not gb then
+            gb = { minx = math.huge, miny = math.huge, minz = math.huge, maxx = -math.huge, maxy = -math.huge, maxz = -math.huge, n = 0 }
+            GB[g] = gb
+        end
+        gb.n = gb.n + 1
+
+        for q = 1, 3 do
+            local p = P[q]
+            local ni, ti = TNI[base + q], TTI[base + q]
+            local nrm = fn
+            if hasN and ni and nx[ni] then nrm = Vector(nx[ni], ny[ni], nz[ni]) end
+            local u, v = 0, 0
+            if hasT and ti and tu[ti] then
+                u = tu[ti]
+                v = FLIP_V and (1 - tv[ti]) or tv[ti]
+            end
+            verts[#verts + 1] = { pos = p, normal = nrm, u = u, v = v }
+            if p.x < gb.minx then gb.minx = p.x end if p.x > gb.maxx then gb.maxx = p.x end
+            if p.y < gb.miny then gb.miny = p.y end if p.y > gb.maxy then gb.maxy = p.y end
+            if p.z < gb.minz then gb.minz = p.z end if p.z > gb.maxz then gb.maxz = p.z end
+            T[#T + 1] = p.x T[#T + 1] = p.y T[#T + 1] = p.z
+        end
+        if t % 150 == 0 then pace() end
+    end
+
+    triT, triG, triN = T, TG, #TG
+
+    local ok, m = pcall(mesh.createFromTable, verts)
+    if not ok or not m then say("mesh error: " .. tostring(m)) return end
+    local ok2, err2 = pcall(createLayers, m)
+    if not ok2 then say("hologram error: " .. tostring(err2)) return end
+    meshReady = true
+    say("drone ready. Type !help for commands.")
+end
+
+timer.simple(0.5, function()
+    say("loading model...")
+    local ok, err = pcall(http.get, OBJ_URL, function(body)
+        addJob(function() buildJob(body) end)
+    end, function(e) say("OBJ download failed: " .. tostring(e)) end)
+    if not ok then say("http error: " .. tostring(err)) end
+end)
+
+----------------------------------------------------------------
+-- HELPERS: transforms, picking
+----------------------------------------------------------------
+local function m2w(v) return (localToWorld(v, Angle(0, 0, 0), dpos, holoAng)) end
+
+local function rayTri(ox, oy, oz, dx, dy, dz, ax, ay, az, bx, by, bz, cx, cy, cz)
+    local e1x, e1y, e1z = bx - ax, by - ay, bz - az
+    local e2x, e2y, e2z = cx - ax, cy - ay, cz - az
+    local px, py, pz = dy * e2z - dz * e2y, dz * e2x - dx * e2z, dx * e2y - dy * e2x
+    local det = e1x * px + e1y * py + e1z * pz
+    if det > -1e-9 and det < 1e-9 then return nil end
+    local inv = 1 / det
+    local tx, ty, tz = ox - ax, oy - ay, oz - az
+    local u = (tx * px + ty * py + tz * pz) * inv
+    if u < 0 or u > 1 then return nil end
+    local qx, qy, qz = ty * e1z - tz * e1y, tz * e1x - tx * e1z, tx * e1y - ty * e1x
+    local v = (dx * qx + dy * qy + dz * qz) * inv
+    if v < 0 or u + v > 1 then return nil end
+    local t = (e2x * qx + e2y * qy + e2z * qz) * inv
+    if t > 0 then return t end
+    return nil
+end
+
+local function startPick(cb)
+    if not meshReady or triN == 0 then say("mesh not ready yet") return end
+    local eye, aim = ME:getShootPos(), ME:getAimVector()
+    local cpos, cang = cpyV(dpos), Angle(holoAng.p, holoAng.y, holoAng.r)
+    addJob(function()
+        local o = (worldToLocal(eye, Angle(0, 0, 0), cpos, cang))
+        local p2 = (worldToLocal(eye + aim * 100, Angle(0, 0, 0), cpos, cang))
+        local d = (p2 - o):getNormalized()
+        local ox, oy, oz, dx, dy, dz = o.x, o.y, o.z, d.x, d.y, d.z
+        local T = triT
+        local bestT, bestI = nil, nil
+        for i = 1, triN do
+            local b = (i - 1) * 9
+            local t = rayTri(ox, oy, oz, dx, dy, dz, T[b + 1], T[b + 2], T[b + 3], T[b + 4], T[b + 5], T[b + 6], T[b + 7], T[b + 8], T[b + 9])
+            if t and (not bestT or t < bestT) then bestT, bestI = t, i end
+            if i % 250 == 0 then pace() end
+        end
+        if bestT then
+            cb(Vector(ox + dx * bestT, oy + dy * bestT, oz + dz * bestT), GN[triG[bestI]])
+        else
+            cb(nil)
+        end
+    end)
+end
+
+----------------------------------------------------------------
+-- DRONE MOVEMENT + AIMING
+----------------------------------------------------------------
+-- the point your crosshair is looking at (far point if it hits nothing)
+local function getAimPoint()
+    local eye, aim = ME:getShootPos(), ME:getAimVector()
+    local far = eye + aim * RANGE
+    local ok, tr = pcall(trace.line, eye, far, { ME })
+    if ok and tr and tr.Hit then return tr.HitPos end
+    return far
+end
+
+local function updateDrone(dt, now)
+    if not isValid(ME) then return end
+    if inspect then
+        dpos = inspect.pos
+        dvel = Vector(0, 0, 0)
+        dang = inspect.ang
+    else
+        local ea = ME:getEyeAngles()
+        local ya = Angle(0, ea.y, 0)
+        local target = ME:getPos() + Vector(0, 0, HOVER_HEIGHT + math.sin(now * 2) * BOB_AMOUNT)
+            + ya:getRight() * FOLLOW_SIDE - ya:getForward() * FOLLOW_BACK
+        if (target - dpos):getLength() > 500 then dpos = target dvel = Vector(0, 0, 0) end
+        dvel = dvel + ((target - dpos) * SPRING - dvel * DAMP) * dt
+        dpos = dpos + dvel * dt
+
+        -- turn the whole drone toward the aim point
+        local dir = getAimPoint() - dpos
+        if dir:getLength() < AIM_MIN_DIST then dir = ME:getAimVector() end
+        local want = dir:getAngle()
+        local wantYaw = want.y
+        local wantPitch = clamp(angDiff(want.p, 0), -80, 80)
+        local k = math.min(1, dt * AIM_TURN)
+        dyaw = dyaw + angDiff(wantYaw, dyaw) * k
+        aimPitch = aimPitch + (wantPitch - aimPitch) * k
+
+        -- small tilt from movement
+        local ca = Angle(0, dyaw, 0)
+        local vf, vr = dvel:dot(ca:getForward()), dvel:dot(ca:getRight())
+        dpitch = dpitch + (clamp(vf * 0.05, -25, 25) - dpitch) * math.min(1, dt * 6)
+        droll  = droll  + (clamp(vr * 0.05, -25, 25) - droll)  * math.min(1, dt * 6)
+        dang = Angle(aimPitch + dpitch * 0.4, dyaw, droll)
+    end
+    local _, ha = localToWorld(Vector(0, 0, 0), MODEL_ANG, Vector(0, 0, 0), dang)
+    holoAng = ha
+    for _, h in ipairs(layers) do
+        h:setPos(dpos)
+        h:setAngles(holoAng)
+    end
+end
+
+----------------------------------------------------------------
+-- COMBAT (client side visuals + sending fire requests)
+----------------------------------------------------------------
+local bolts, flashes, impacts = {}, {}, {}
+local nextFire = 0
+local autoFire = false
+
+local function muzzleWorld()
+    local list = (#turrets > 0) and turrets or { Vector(0, SIZE * 0.5, 0) }
+    local out = {}
+    for i, v in ipairs(list) do
+        if i > 16 then break end
+        out[i] = m2w(v)
+    end
+    return out
+end
+
+local function doFire(now)
+    local muz = muzzleWorld()
+    local bdir = (localToWorld(BARREL_DIR, Angle(0, 0, 0), Vector(0, 0, 0), holoAng))
+    net.start("drone_fire")
+    net.writeVector(ME:getShootPos())
+    net.writeVector(ME:getAimVector())
+    net.writeVector(bdir)
+    net.writeUInt(#muz, 5)
+    for _, m in ipairs(muz) do net.writeVector(m) end
+    net.send()
+    nextFire = now + FIRE_DELAY
+end
+
+net.receive("drone_shots", function()
+    local n = net.readUInt(5)
+    local now = timer.curtime()
+    for i = 1, n do
+        local a = net.readVector()
+        local b = net.readVector()
+        local nr = net.readVector()
+        local kind = net.readUInt(2)
+        local d = b - a
+        local dist = d:getLength()
+        bolts[#bolts + 1] = { a = a, dir = dist > 0.01 and d * (1 / dist) or Vector(0, 0, 1),
+            dist = dist, t = now, kind = kind, n = nr, done = false }
+        flashes[#flashes + 1] = { p = a, t = now }
+    end
+    while #bolts > 200 do table.remove(bolts, 1) end
+    while #flashes > 100 do table.remove(flashes, 1) end
+    if holoMain then
+        pcall(function()
+            holoMain:emitSound(FIRE_SNDS[math.random(#FIRE_SNDS)], 75, math.random(95, 110), SND_VOLUME)
+        end)
+    end
+end)
+
+local function updateCombat(dt, now)
+    if isOwnerClient and meshReady and not chatOpen then
+        local down = input.isKeyDown(FIRE_KEY)
+        if (down or autoFire) and now >= nextFire then doFire(now) end
+    end
+
+    for i = #bolts, 1, -1 do
+        local b = bolts[i]
+        local head = (now - b.t) * BOLT_SPEED
+        if not b.done and head >= b.dist then
+            b.done = true
+            if b.kind > 0 then
+                local pos = b.a + b.dir * b.dist
+                impacts[#impacts + 1] = { p = pos + b.n * 0.5, t = now }
+                if GMOD_EFFECTS then
+                    pcall(function()
+                        local e = effect.create()
+                        e:setOrigin(pos)
+                        e:setNormal(b.n)
+                        e:play("AR2Impact")
+                    end)
+                end
+            end
+        end
+        if head - BOLT_LENGTH >= b.dist then table.remove(bolts, i) end
+    end
+    for i = #flashes, 1, -1 do
+        if now - flashes[i].t > FLASH_TIME then table.remove(flashes, i) end
+    end
+    for i = #impacts, 1, -1 do
+        if now - impacts[i].t > 0.3 then table.remove(impacts, i) end
+    end
+end
+
+local function drawCombat(now)
+    if #bolts > 0 then
+        render.setMaterial(beamMat)
+        for _, b in ipairs(bolts) do
+            local head = math.min((now - b.t) * BOLT_SPEED, b.dist)
+            local tail = math.max(0, head - BOLT_LENGTH)
+            if head > tail then
+                local p1, p2 = b.a + b.dir * tail, b.a + b.dir * head
+                render.setColor(Color(BOLT_COLOR.r, BOLT_COLOR.g, BOLT_COLOR.b, 110))
+                render.draw3DBeam(p1, p2, BOLT_WIDTH * 3, 0, 1)
+                render.setColor(BOLT_COLOR)
+                render.draw3DBeam(p1, p2, BOLT_WIDTH, 0, 1)
+                render.setColor(Color(255, 255, 255, 255))
+                render.draw3DBeam(p1, p2, BOLT_WIDTH * 0.35, 0, 1)
+            end
+        end
+    end
+    render.setMaterial(glowMat)
+    for _, f in ipairs(flashes) do
+        local k = 1 - (now - f.t) / FLASH_TIME
+        render.setColor(Color(BOLT_COLOR.r * k, BOLT_COLOR.g * k, BOLT_COLOR.b * k, 255))
+        sprite(f.p, 18 * k + 2)
+    end
+    for _, im in ipairs(impacts) do
+        local k = (now - im.t) / 0.3
+        local f = 1 - k
+        render.setColor(Color(BOLT_COLOR.r * f, BOLT_COLOR.g * f, BOLT_COLOR.b * f, 255))
+        local sz = 8 + 22 * k
+        sprite(im.p, sz)
+        render.setColor(Color(255 * f, 255 * f, 255 * f, 255))
+        sprite(im.p, sz * 0.4)
+    end
+end
+
+----------------------------------------------------------------
+-- DEBUG DRAW (owner only): markers, saved barrels, axes
+-- (only shown while in !inspect mode, so normal play stays clean)
+----------------------------------------------------------------
+local marker, hover, hoverGroup = nil, nil, nil
+local showTurrets, showAxes, live = true, false, true
+
+local function drawDebug(now)
+    if not isOwnerClient or not meshReady or not inspect then return end
+    pcall(render.enableDepth, false)
+
+    if showAxes then
+        render.setMaterial(beamMat)
+        local L = SIZE * 0.7
+        local o = m2w(Vector(0, 0, 0))
+        render.setColor(Color(255, 40, 40, 255)) render.draw3DBeam(o, m2w(Vector(L, 0, 0)), 0.5, 0, 1)
+        render.setColor(Color(40, 255, 40, 255)) render.draw3DBeam(o, m2w(Vector(0, L, 0)), 0.5, 0, 1)
+        render.setColor(Color(60, 80, 255, 255)) render.draw3DBeam(o, m2w(Vector(0, 0, L)), 0.5, 0, 1)
+    end
+
+    if showTurrets then
+        for _, v in ipairs(turrets) do
+            local a = m2w(v)
+            local b = m2w(v + BARREL_DIR * 8)
+            render.setMaterial(beamMat)
+            render.setColor(Color(60, 255, 60, 255))
+            render.draw3DBeam(a, b, 0.5, 0, 1)
+            render.setMaterial(glowMat)
+            render.setColor(Color(255, 220, 0, 255))
+            sprite(a, 3)
+        end
+    end
+
+    render.setMaterial(glowMat)
+    if marker then
+        render.setColor(Color(255, 40, 40, 255))
+        sprite(m2w(marker), 4)
+    end
+    if hover then
+        render.setColor(Color(0, 255, 255, 255))
+        sprite(m2w(hover), 2.5)
+    end
+
+    pcall(render.enableDepth, true)
+end
+
+----------------------------------------------------------------
+-- CHAT COMMANDS
+----------------------------------------------------------------
+local CMD = {}
+
+local function viewAngle(name, py)
+    if name == "front" then return Angle(0, py + 180, 0)
+    elseif name == "back" then return Angle(0, py, 0)
+    elseif name == "left" then return Angle(0, py + 90, 0)
+    elseif name == "right" then return Angle(0, py - 90, 0)
+    elseif name == "top" then return Angle(90, py + 180, 0)
+    elseif name == "bottom" then return Angle(-90, py + 180, 0) end
+    return nil
+end
+
+local function placeInspect(dist)
+    local eye, aim = ME:getShootPos(), ME:getAimVector()
+    local py = ME:getEyeAngles().y
+    local ang = inspect and inspect.ang or viewAngle("left", py)
+    inspect = { pos = eye + aim * dist, ang = ang, py = py }
+end
+
+local function saveMarker()
+    if not marker then say("no marker yet (use !pick first)") return false end
+    turrets[#turrets + 1] = cpyV(marker)
+    say("saved #" .. #turrets .. string.format("  (%.2f, %.2f, %.2f)", marker.x, marker.y, marker.z))
+    return true
+end
+
+local function doPick(mode)
+    startPick(function(pt, gname)
+        if not pt then say("crosshair is not on the drone (move closer / aim at it)") return end
+        marker = pt
+        say(string.format("marker: %.2f, %.2f, %.2f  [%s]", pt.x, pt.y, pt.z, tostring(gname)))
+        if mode == "save" or mode == "mirror" then
+            saveMarker()
+            if mode == "mirror" and math.abs(pt.x) > 0.01 then
+                turrets[#turrets + 1] = Vector(-pt.x, pt.y, pt.z)
+                say("saved mirror #" .. #turrets)
+            end
+        end
+    end)
+end
+
+CMD.help = function()
+    say("!inspect [dist] / !follow | !view left|right|front|back|top|bottom | !spin !tilt !roll <deg>")
+    say("!pick [save|mirror] (keys H / J / K) | !x !y !z <n> | !set x y z | !center | !live")
+    say("!save | !mirror [x|y|z] | !undo | !clear | !list | !show | !axes | !fire | !groups [n] | !goto <n> | !bounds | !hud")
+end
+
+CMD.hud = function() enableHudSafe() end
+
+CMD.inspect = function(a)
+    placeInspect(tonumber(a[2]) or 55)
+    showAxes, showTurrets = true, true
+    say("drone frozen in front of you. Walk/look freely, aim at a barrel, press H (pick) / J (save) / K (save+mirror).")
+end
+CMD.follow = function() inspect = nil say("following you again") end
+CMD.view = function(a)
+    if not inspect then say("use !inspect first") return end
+    local ang = viewAngle(a[2] or "", inspect.py)
+    if not ang then say("views: left right front back top bottom") return end
+    inspect.ang = ang
+end
+local function rot(idx)
+    return function(a)
+        if not inspect then say("use !inspect first") return end
+        local d = tonumber(a[2])
+        if not d then say("give degrees") return end
+        local p, y, r = inspect.ang.p, inspect.ang.y, inspect.ang.r
+        if idx == 1 then p = p + d elseif idx == 2 then y = y + d else r = r + d end
+        inspect.ang = Angle(p, y, r)
+    end
+end
+CMD.tilt, CMD.spin, CMD.roll = rot(1), rot(2), rot(3)
+
+CMD.pick = function(a) doPick(a[2]) end
+CMD.live = function() live = not live say("live hover: " .. tostring(live)) end
+CMD.axes = function() showAxes = not showAxes say("axes: " .. tostring(showAxes) .. " (red +X, green +Y, blue +Z)") end
+CMD.show = function() showTurrets = not showTurrets say("show barrels: " .. tostring(showTurrets)) end
+
+local function nudge(ax)
+    return function(a)
+        local n = tonumber(a[2])
+        if not n then say("give a number") return end
+        marker = marker or Vector(0, 0, 0)
+        marker = marker + Vector(ax == 1 and n or 0, ax == 2 and n or 0, ax == 3 and n or 0)
+        say(string.format("marker: %.2f, %.2f, %.2f", marker.x, marker.y, marker.z))
+    end
+end
+CMD.x, CMD.y, CMD.z = nudge(1), nudge(2), nudge(3)
+CMD.set = function(a)
+    local x, y, z = tonumber(a[2]), tonumber(a[3]), tonumber(a[4])
+    if not (x and y and z) then say("!set x y z") return end
+    marker = Vector(x, y, z)
+end
+CMD.center = function() marker = Vector(0, 0, 0) end
+CMD.save = function() saveMarker() end
+CMD.mirror = function(a)
+    local last = turrets[#turrets]
+    if not last then say("nothing saved yet") return end
+    local ax = a[2] or "x"
+    local v = Vector(last.x, last.y, last.z)
+    if ax == "x" then v.x = -v.x elseif ax == "y" then v.y = -v.y else v.z = -v.z end
+    turrets[#turrets + 1] = v
+    say(string.format("mirrored -> #%d (%.2f, %.2f, %.2f)", #turrets, v.x, v.y, v.z))
+end
+CMD.undo = function() turrets[#turrets] = nil say("barrels: " .. #turrets) end
+CMD.clear = function() turrets = {} say("cleared") end
+CMD.list = function()
+    local s = "TURRETS = {"
+    for _, v in ipairs(turrets) do
+        s = s .. string.format("\n    Vector(%.2f, %.2f, %.2f),", v.x, v.y, v.z)
+    end
+    print(s .. "\n}")
+end
+CMD.fire = function() autoFire = not autoFire say("auto-fire: " .. tostring(autoFire)) end
+CMD.bounds = function()
+    say(string.format("bounds min(%.1f %.1f %.1f) max(%.1f %.1f %.1f)", fitMin.x, fitMin.y, fitMin.z, fitMax.x, fitMax.y, fitMax.z))
+end
+
+local function findGroup(q)
+    q = string.lower(q or "")
+    for i, name in ipairs(GN) do
+        if string.find(string.lower(name), q, 1, true) then return i end
+    end
+end
+CMD.groups = function(a)
+    if a[2] then
+        local g = findGroup(a[2])
+        local b = g and GB[g]
+        if not b then say("no such group") return end
+        say(string.format("%s: %d tris, min(%.1f %.1f %.1f) max(%.1f %.1f %.1f)", GN[g], b.n, b.minx, b.miny, b.minz, b.maxx, b.maxy, b.maxz))
+    else
+        local s = {}
+        for i, name in ipairs(GN) do
+            if i > 30 then s[#s + 1] = "..." break end
+            s[#s + 1] = name .. "(" .. (GB[i] and GB[i].n or 0) .. ")"
+        end
+        say("groups: " .. table.concat(s, ", "))
+    end
+end
+CMD["goto"] = function(a)
+    local g = findGroup(a[2])
+    local b = g and GB[g]
+    if not b then say("no such group") return end
+    marker = Vector((b.minx + b.maxx) / 2, (b.miny + b.maxy) / 2, (b.minz + b.maxz) / 2)
+    say("marker at center of " .. GN[g])
+end
+
+local lastCmdText, lastCmdTime = "", -10
+local function handleChat(text)
+    text = string.lower(text)
+    local a = {}
+    for w in string.gmatch(text, "%S+") do a[#a + 1] = w end
+    if #a == 0 or string.sub(a[1], 1, 1) ~= "!" then return end
+    local now = timer.curtime()
+    local key = table.concat(a, " ")
+    if key == lastCmdText and now - lastCmdTime < 0.3 then return end
+    lastCmdText, lastCmdTime = key, now
+    local fn = CMD[string.sub(a[1], 2)]
+    if not fn then say("unknown command, try !help") return end
+    local ok, err = pcall(fn, a)
+    if not ok then say("command error: " .. tostring(err)) end
+end
+
+if isOwnerClient then
+    hook.add("playersay",    "drone_chat1", function(ply, text) if ply == ME then handleChat(text) end end)
+    hook.add("playerchat",   "drone_chat2", function(ply, text) if ply == ME then handleChat(text) end end)
+    hook.add("onplayerchat", "drone_chat3", function(ply, text) if ply == ME then handleChat(text) end end)
+    net.receive("drone_cmd", function() handleChat(net.readString()) end)
+
+    hook.add("startchat",  "drone_sc", function() chatOpen = true end)
+    hook.add("finishchat", "drone_fc", function() chatOpen = false end)
+
+    hook.add("inputPressed", "drone_keys", function(key)
+        if chatOpen then return end
+        if key == PICK_KEY then doPick(nil)
+        elseif key == PICK_SAVE_KEY then doPick("save")
+        elseif key == PICK_MIR_KEY then doPick("mirror") end
+    end)
+end
+
+----------------------------------------------------------------
+-- MAIN LOOPS
+----------------------------------------------------------------
+local startT = timer.curtime()
+local transSeen, opaqueSeen = -10, -10
+local reportedHook = false
+local nextHover, lastEye, lastAim = 0, nil, Vector(0, 0, 1)
+
+hook.add("think", "drone_think", function()
+    local dt = math.min(timer.frametime(), 0.05)
+    local now = timer.curtime()
+
+    runJobs()
+    safe("move", updateDrone, dt, now)
+    safe("combat", updateCombat, dt, now)
+
+    -- live hover preview while inspecting
+    if isOwnerClient and inspect and live and meshReady and #jobs == 0 and now > nextHover then
+        local eye, aim = ME:getShootPos(), ME:getAimVector()
+        if not lastEye or (eye - lastEye):getLengthSqr() > 0.01 or aim:dot(lastAim) < 0.999999 then
+            lastEye, lastAim = eye, aim
+            nextHover = now + 0.15
+            startPick(function(pt, g) hover, hoverGroup = pt, g end)
+        end
+    end
+
+    if isOwnerClient and not reportedHook and now - startT > 3 then
+        reportedHook = true
+        if transSeen > 0 then say("drawing via hook: postdrawtranslucentrenderables")
+        elseif opaqueSeen > 0 then say("drawing via hook: postdrawopaquerenderables")
+        else
+            say("WARNING: no 3D render hook fired (HUD enabled: " .. tostring(hudOn) .. "). Try !hud, or press E on the chip.")
+            reportedHook = false
+            startT = now   -- check again in 3 seconds
+        end
+    end
+end)
+
+local function onDraw(kind, inDepth, inSky, inSky3D)
+    if inDepth or inSky or inSky3D then return end   -- only draw in the main pass
+    local now = timer.curtime()
+    if kind == "opaque" then
+        opaqueSeen = now
+        if now - transSeen < 1 then return end
+    else
+        transSeen = now
+    end
+    safe("combatDraw", drawCombat, now)
+    safe("debugDraw", drawDebug, now)
+end
+hook.add("postdrawtranslucentrenderables", "drone_draw_t", function(d, s, s3) onDraw("trans", d, s, s3) end)
+hook.add("postdrawopaquerenderables", "drone_draw_o", function(d, s, s3) onDraw("opaque", d, s, s3) end)
