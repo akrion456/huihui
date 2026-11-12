@@ -15,6 +15,7 @@ SCALE = nil                      -- raw scale override
 MODEL_ANG = Angle(0, 90, 90)
 CENTER = true
 DEBUG = true                     -- prints lock / seat / shield results in chat
+DOUBLE_SIDED = true              -- "render inside": duplicate faces with flipped normals (like prop2mesh)
 
 -- follow
 FOLLOW_BACK = 8
@@ -54,13 +55,18 @@ SEAT_MODEL = "models/nova/airboat_seat.mdl"
 SEAT_YAW_OFF = -90               -- seat yaw = facing yaw + this (if you sit sideways change to 0 / 90 / 180)
 SEAT_WAIT = 6                    -- seconds to wait for you to be seated before cancelling
 
--- multiplayer sync
-STATE_RATE = 0.1
+-- multiplayer sync / smoothing
+STATE_RATE = 0.05                -- state send interval while flying (K / L)
+STATE_RATE_IDLE = 0.1            -- state send interval while just following
+REMOTE_POS_RATE = 18             -- how fast other players' view of the drone eases to the synced position
+REMOTE_ANG_RATE = 16             -- ...and to the synced rotation
+REMOTE_EYE_RATE = 20             -- smoothing of the owner's (stepped) eye angles on other clients
 
 -- force shield (directional model)
 SHIELD_OBJ_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/shield.obj"
 SHIELD_TEX_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/force_shield_phase_1.png"
 SHIELD_EMI_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/emissiveMap3.png"
+SHIELD_TEST = false              -- true = armed shields stay visible and follow your aim (to check look / orientation)
 SHIELD_AUTO_AXIS = true          -- auto-detect which way the model faces (prints the result)
 SHIELD_FLIP = false              -- true = turn the model 180 degrees
 SHIELD_MODEL_ANG = Angle(0, 0, 0) -- extra manual rotation (after auto-detect). Model's front must end up on +X
@@ -599,6 +605,7 @@ local function ease(t) return t * t * (3 - 2 * t) end
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
 local function angDiff(a, b) return (a - b + 180) % 360 - 180 end
 local function rnd(a, b) return a + math.random() * (b - a) end
+local function expK(rate, dt) return 1 - math.exp(-rate * dt) end   -- frame-rate independent smoothing factor
 
 local function chatOpen()
     local ok, r = pcall(function() return chat.isOpen() end)
@@ -648,7 +655,7 @@ local DR = {
     rideYaw = 0, eyeOff = Vector(0, 0, RIDE_EYE_UP), viewAng = ME:getEyeAngles(),
     hidden = false, ready = false,
 }
-local REM = { mode = 0, kT = 1, pos = Vector(), vel = Vector(), ang = Angle(), t = -100 }
+local REM = { mode = 0, kT = 1, pos = Vector(), vel = Vector(), ang = Angle(), av = Vector(), t = -100 }
 local layers = {}
 local anchor = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(0.1, 0.1, 0.1))
 anchor:setNoDraw(true)
@@ -755,17 +762,20 @@ hook.add("think", "dr_jobs", function()
 end)
 
 ---------------- materials ----------------
+-- with DOUBLE_SIDED the mesh already contains both faces, so no $nocull anywhere (correct lighting inside)
 local matBase = material.create("VertexLitGeneric")
 matBase:setTextureURL("$basetexture", TEX_URL)
-matBase:setInt("$nocull", 1)
+if not DOUBLE_SIDED then matBase:setInt("$nocull", 1) end
+
+local EMI_FLAGS = 16 + 32 + 128 + (DOUBLE_SIDED and 0 or 8192)   -- vertexcolor + vertexalpha + additive
 
 local matEmi = material.create("UnlitGeneric")
 matEmi:setTextureURL("$basetexture", EMI_URL)
-matEmi:setInt("$flags", 16 + 32 + 128 + 8192)
+matEmi:setInt("$flags", EMI_FLAGS)
 
 local matLift = material.create("UnlitGeneric")
 matLift:setTextureURL("$basetexture", EMI_URL)
-matLift:setInt("$flags", 16 + 32 + 128 + 8192)
+matLift:setInt("$flags", EMI_FLAGS)
 matLift:setVector("$color2", Vector(0.5, 0.5, 0.5))
 
 local matGlow = material.create("UnlitGeneric")
@@ -851,6 +861,31 @@ local function makeTris(V, VT, VN, FL)
     return tris
 end
 
+-- "render inside": append a reversed copy of every triangle with flipped normals (same as prop2mesh)
+local function doubleSided(tris)
+    local n = #tris
+    local out = {}
+    for i = 1, n do out[i] = tris[i] end
+    local m = n
+    for i = 1, n, 3 do
+        local a, b, c = tris[i], tris[i + 1], tris[i + 2]
+        if a and b and c then
+            out[m + 1] = { pos = a.pos, normal = a.normal * -1, u = a.u, v = a.v }
+            out[m + 2] = { pos = c.pos, normal = c.normal * -1, u = c.u, v = c.v }
+            out[m + 3] = { pos = b.pos, normal = b.normal * -1, u = b.u, v = b.v }
+            m = m + 3
+        end
+        if i % 3000 == 1 then pace() end
+    end
+    return out
+end
+
+-- translucent pass + big render bounds for mesh holograms
+local function setupHolo(h, translucent, boundsR)
+    if translucent then pcall(function() h:setRenderMode(4) end) end      -- RENDERMODE_TRANSALPHA
+    pcall(function() h:setRenderBounds(Vector(-boundsR, -boundsR, -boundsR), Vector(boundsR, boundsR, boundsR)) end)
+end
+
 ---------------- shields (directional force shield model) ----------------
 local function newShield()
     local mm = material.create("UnlitGeneric")           -- main texture, uses its alpha channel
@@ -930,7 +965,7 @@ end)
 
 local function updShield(S, dt, now, center, dist, width)
     if not S.h1 then return end
-    local threat = S.on and now < S.holdT
+    local threat = S.on and (SHIELD_TEST or now < S.holdT)
     S.v = approach(S.v, threat and 1 or 0, dt / (threat and SHIELD_FADE_IN or SHIELD_FADE_OUT))
     S.flash = math.max(0, S.flash - dt * 3.5)
     S.cpos, S.dist = center, dist
@@ -941,10 +976,10 @@ local function updShield(S, dt, now, center, dist, width)
     if S.hid then S.h1:setNoDraw(false) S.h2:setNoDraw(false) S.hid = false end
 
     -- opacity follows how close the threat is
-    S.op = S.op + ((0.35 + 0.65 * S.prox) - S.op) * math.min(1, 10 * dt)
+    S.op = S.op + ((0.35 + 0.65 * S.prox) - S.op) * expK(10, dt)
 
-    -- smooth rotation around the pivot
-    local f = math.min(1, SHIELD_TURN * dt)
+    -- smooth rotation around the pivot (wrapped, frame-rate independent)
+    local f = expK(SHIELD_TURN, dt)
     S.yaw = S.yaw + angDiff(S.tyaw, S.yaw) * f
     S.pitch = S.pitch + (S.tpitch - S.pitch) * f
     local ang = Angle(S.pitch, S.yaw, 0)
@@ -1006,15 +1041,18 @@ local function shieldJob()
     shMesh = mesh.createFromTable(tris)
     if not shMesh then print("[Drone] shield mesh creation failed") return end
 
+    local bR = math.max(SHIELD_P_WIDTH, RIDE_SIZE * SHIELD_D_WIDTH, SIZE * SHIELD_D_WIDTH) * 1.5
+    local function mkHolo(mat)
+        local h = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(1, 1, 1))
+        h:setMesh(shMesh)
+        h:setMeshMaterial(mat)
+        setupHolo(h, true, bR)
+        h:setNoDraw(true)
+        return h
+    end
     for _, S in ipairs({ shP, shD }) do
-        S.h1 = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(1, 1, 1))
-        S.h1:setMesh(shMesh)
-        S.h1:setMeshMaterial(S.mm)
-        S.h1:setNoDraw(true)
-        S.h2 = hologram.create(ME:getPos(), Angle(), CUBE_MDL, Vector(1, 1, 1))
-        S.h2:setMesh(shMesh)
-        S.h2:setMeshMaterial(S.me)
-        S.h2:setNoDraw(true)
+        S.h1 = mkHolo(S.mm)
+        S.h2 = mkHolo(S.me)
         S.hid = true
     end
     if IS_OWNER then print("[Drone] shield model ready (" .. math.floor(#tris / 3) .. " tris, " .. info .. ")") end
@@ -1044,21 +1082,25 @@ local function buildJob()
     DR.fitHalf = DR.unit / 2
 
     local tris = makeTris(V, VT, VN, FL)
+    local triCount = math.floor(#tris / 3)
+    if DOUBLE_SIDED then tris = doubleSided(tris) end
 
-    if #tris > 65000 then print("[Drone] warning: mesh has " .. #tris .. " verts, may exceed the limit") end
+    if #tris > 65000 then print("[Drone] warning: mesh has " .. #tris .. " verts, may exceed the limit (set DOUBLE_SIDED = false)") end
     theMesh = mesh.createFromTable(tris)
     if not theMesh then print("[Drone] mesh creation failed") return end
 
     local mats = { matBase, matEmi, matLift }
+    local bR = math.max(DR.unit, RIDE_SIZE) * 2
     for i = 1, 3 do
         local h = hologram.create(DR.pos, DR.ang, CUBE_MDL, Vector(1, 1, 1))
         h:setMesh(theMesh)
         h:setMeshMaterial(mats[i])
+        setupHolo(h, i > 1, bR)          -- glow layers go to the translucent pass (drawn AFTER the opaque base)
         layers[i] = h
     end
     DR.ready = true
     DR.appliedK = -1
-    if IS_OWNER then print("[Drone] model ready (" .. math.floor(#tris / 3) .. " tris)") end
+    if IS_OWNER then print("[Drone] model ready (" .. triCount .. " tris" .. (DOUBLE_SIDED and ", double-sided" or "") .. ")") end
 end
 
 http.get(OBJ_URL, function(body)
@@ -1092,16 +1134,29 @@ local function moveCollide(dt, mins, maxs)
 end
 
 local function orient(dt, yawT, pitchT, tiltScale)
-    local f = math.min(1, AIM_TURN * dt)
+    local f = expK(AIM_TURN, dt)
     DR.yaw = DR.yaw + angDiff(yawT, DR.yaw) * f
     DR.aimPitch = DR.aimPitch + (pitchT - DR.aimPitch) * f
     local ya = Angle(0, DR.yaw, 0)
     local tp = clamp(DR.vel:dot(ya:getForward()) * 0.012, -14, 14) * tiltScale
     local tr = clamp(DR.vel:dot(ya:getRight()) * 0.012, -14, 14) * tiltScale
-    local g = math.min(1, 6 * dt)
+    local g = expK(6, dt)
     DR.tiltP = DR.tiltP + (tp - DR.tiltP) * g
     DR.tiltR = DR.tiltR + (tr - DR.tiltR) * g
     DR.ang = Angle(DR.aimPitch + DR.tiltP, DR.yaw, DR.tiltR)
+end
+
+-- the owner's eye angles are exact on their own client but only update at snapshot rate on everyone else's,
+-- so other clients smooth them (otherwise the drone's aim / orbit visibly steps)
+local EYE = { p = 0, y = 0, init = false }
+local function viewAngles(dt)
+    local e = ME:getEyeAngles()
+    if IS_OWNER then return e end
+    if not EYE.init then EYE.p, EYE.y, EYE.init = e.p, e.y, true end
+    local k = expK(REMOTE_EYE_RATE, dt)
+    EYE.p = EYE.p + angDiff(e.p, EYE.p) * k
+    EYE.y = EYE.y + angDiff(e.y, EYE.y) * k
+    return Angle(EYE.p, EYE.y, 0)
 end
 
 local function readMove()
@@ -1131,7 +1186,7 @@ end
 
 ---------------- mode steps ----------------
 local function followStep(dt)
-    local eye = ME:getEyeAngles()
+    local eye = viewAngles(dt)
     local fa = Angle(0, eye.y, 0)
     local bob = math.sin(timer.curtime() * 1.7) * BOB_AMOUNT
     local target = ME:getPos() + fa:getForward() * (-FOLLOW_BACK) + fa:getRight() * FOLLOW_SIDE + Vector(0, 0, HOVER_HEIGHT + bob)
@@ -1232,16 +1287,31 @@ local function rideStep(dt)
     end
 end
 
--- other players: follow the owner's synced drone
+-- other players: follow the owner's synced drone (extrapolate + ease, so 20 Hz updates look continuous)
 local function remoteStep(dt, now)
     local fresh = (now - REM.t) < 1.5
     if fresh and REM.mode ~= 0 then
-        local age = math.min(now - REM.t, 0.2)
+        local age = math.min(now - REM.t, 0.15)
+
+        -- position
         local tp = REM.pos + REM.vel * age
-        DR.pos = DR.pos + (tp - DR.pos) * math.min(1, 14 * dt)
+        if (DR.pos - tp):getLength() > 800 then
+            DR.pos = tp
+        else
+            DR.pos = DR.pos + (tp - DR.pos) * expK(REMOTE_POS_RATE, dt)
+        end
         DR.vel = REM.vel
-        DR.ang = REM.ang
-        DR.yaw = REM.ang.y
+
+        -- rotation: extrapolate with angular velocity, then ease (wrapped)
+        local av = REM.av
+        local ta = Angle(REM.ang.p + av.x * age, REM.ang.y + av.y * age, REM.ang.r + av.z * age)
+        local k = expK(REMOTE_ANG_RATE, dt)
+        DR.ang = Angle(
+            DR.ang.p + angDiff(ta.p, DR.ang.p) * k,
+            DR.ang.y + angDiff(ta.y, DR.ang.y) * k,
+            DR.ang.r + angDiff(ta.r, DR.ang.r) * k)
+        -- keep orient()'s state in sync so switching back to follow doesn't snap
+        DR.yaw, DR.aimPitch, DR.tiltP, DR.tiltR = DR.ang.y, DR.ang.p, 0, DR.ang.r
         DR.kT = REM.kT
     else
         followStep(dt)
@@ -1259,9 +1329,21 @@ net.receive("dr_state", function()
     if IS_OWNER then return end
     setOn(shP, bit.band(f, 1) ~= 0)
     setOn(shD, bit.band(f, 2) ~= 0)
+
+    local now = timer.curtime()
+    local av = Vector()
+    if m ~= 0 and REM.mode ~= 0 and (now - REM.t) < 0.5 then
+        local d = clamp(now - REM.t, 0.03, 0.25)
+        local nav = Vector(
+            clamp(angDiff(ap, REM.ang.p) / d, -900, 900),
+            clamp(angDiff(ay, REM.ang.y) / d, -900, 900),
+            clamp(angDiff(ar, REM.ang.r) / d, -900, 900))
+        av = REM.av * 0.5 + nav * 0.5          -- low-pass: network jitter would make it twitchy
+    end
     REM.mode, REM.kT, REM.pos, REM.vel = m, kT, pos, vel
     REM.ang = Angle(ap, ay, ar)
-    REM.t = timer.curtime()
+    REM.av = av
+    REM.t = now
 end)
 
 ---------------- mode switches ----------------
@@ -1516,7 +1598,7 @@ hook.add("think", "dr_think", function()
         -- state broadcast for other players (also feeds the server shield logic)
         DR.snT = DR.snT - dt
         if DR.snT <= 0 then
-            DR.snT = STATE_RATE
+            DR.snT = (DR.mode == "follow") and STATE_RATE_IDLE or STATE_RATE
             sendState()
         end
     else
@@ -1524,7 +1606,7 @@ hook.add("think", "dr_think", function()
     end
 
     -- size
-    DR.k = DR.k + (DR.kT - DR.k) * math.min(1, SIZE_RATE * dt)
+    DR.k = DR.k + (DR.kT - DR.k) * expK(SIZE_RATE, dt)
     if math.abs(DR.kT - DR.k) < 0.002 then DR.k = DR.kT end
 
     -- drone holograms
@@ -1542,11 +1624,19 @@ hook.add("think", "dr_think", function()
             DR.appliedK = DR.k
             local v = Vector(DR.k, DR.k, DR.k)
             layers[1]:setScale(v)
-            layers[2]:setScale(v)
+            layers[2]:setScale(v * 1.004)     -- tiny offset: no z-fight with the base layer
             layers[3]:setScale(v * 1.012)
         end
     end
     DR.hidden = hide
+
+    -- shield test mode: armed shields follow your aim so you can check orientation / look
+    if SHIELD_TEST then
+        local e = ME:getEyeAngles()
+        for _, S in ipairs({ shP, shD }) do
+            if S.on then S.tyaw, S.tpitch, S.prox = e.y, clamp(e.p, -80, 80), 1 end
+        end
+    end
 
     -- shields (pivot = center of the player / center of the drone)
     local riding
