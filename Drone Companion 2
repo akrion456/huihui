@@ -153,9 +153,8 @@ SPARK_SOUNDS = {
 -- pulse cannon VFX / SFX
 PULSE_VFX = true
 PULSE_VFX_DETAIL = 1.0
-PULSE_BEAM_TIME = 0.8
+PULSE_BEAM_TIME = 0.42
 PULSE_SHAKE = true
-PULSE_SCREEN_FLASH = true
 PULSE_SPLASH_RADIUS = 300
 PULSE_SPLASH_DAMAGE = 500
 PULSE_CHARGE_STAGES = {
@@ -1023,28 +1022,6 @@ local function muzzleBurst(start, dir)
     endEmitter(em)
 end
 
-local function beamLineFx(a, b)
-    local delta = b - a
-    local len = delta:getLength()
-    if len < 10 then return end
-    local u = DR.unit * DR.k
-    local em = newEmitter(a)
-    if not em then return end
-    for i = 1, detail(math.min(70, len / 140)) do
-        local p = a + delta * math.random()
-        local off = randUnit()
-        P(em, PM.flare, p + off * u * 0.3, u * 0.9, 0, 255, 0, 0.25 + math.random() * 0.35, off * 40, Color(80, 200, 255))
-        if i % 2 == 0 then
-            P(em, PM.spark, p, 2, 1, 255, 0, 0.6 + math.random() * 0.9, off * (120 + math.random() * 260),
-                Color(170, 240, 255), Vector(0, 0, -120), 1.5, 14, 4)
-        end
-        if i % 3 == 0 then
-            P(em, PM.smoke[2], p, u * 0.5, u * (1.5 + math.random()), 90, 0, 1.6 + math.random() * 1.6,
-                off * (20 + math.random() * 50) + Vector(0, 0, 15), Color(150, 200, 230), nil, 2, 0, 0, math.random() * 360)
-        end
-    end
-    endEmitter(em)
-end
 
 local function impactFx(pos, n, entHit)
     local a, b = basisOf(n)
@@ -1110,7 +1087,6 @@ net.receive("dr_shot", function()
     addRing(a + dir * 30, dir, 10, 420, 0.55, Color(60, 160, 255, 200), 0.05)
     shake(a, 12, 0.8, 1500)
     FX.queue[#FX.queue + 1] = function() muzzleBurst(a, dir) end
-    FX.queue[#FX.queue + 1] = function() beamLineFx(a, b) end
     if hit then FX.queue[#FX.queue + 1] = function() impactFx(b, n, entHit) end end
 end)
 
@@ -1129,44 +1105,6 @@ local function pulseFxUpdate(now, dt)
     FX.charge = c
     if not PULSE_VFX or not DR.ready then return end
     local u = DR.unit * DR.k
-
-    if c > 0 then
-        local mz = muzzlePos()
-        if now >= FX.nextShake then
-            FX.nextShake = now + 0.12
-            shake(mz, 0.5 + 5 * c * c, 0.2, 700)
-        end
-        if now >= FX.nextCharge and fxBudget() then
-            FX.nextCharge = now + 0.04
-            local em = newEmitter(mz)
-            if em then
-                for i = 1, detail(2 + 6 * c) do
-                    local p0 = mz + randUnit() * (u * (1.2 + math.random() * 2.2))
-                    local life = 0.35 + math.random() * 0.25
-                    local vel = (mz - p0) * (1 / life)
-                    P(em, PM.spark, p0, 2, 1, 255, 255, life, vel, Color(80, 200, 255), nil, nil, u * 0.35, u * 0.08)
-                    if i % 3 == 0 then P(em, PM.flare, p0, u * 0.35, u * 0.05, 200, 255, life, vel, Color(120, 220, 255)) end
-                end
-                endEmitter(em)
-            end
-        end
-        if now >= FX.nextDust then
-            FX.nextDust = now + 0.07
-            local ok, tr = pcall(trace.line, DR.pos, DR.pos - Vector(0, 0, 500), ME)
-            if ok and tr and tr.Hit and not tr.StartSolid and fxBudget() then
-                local em = newEmitter(tr.HitPos)
-                if em then
-                    for i = 1, detail(2 + 4 * c) do
-                        local ang = math.random() * math.pi * 2
-                        local d = Vector(math.cos(ang), math.sin(ang), 0)
-                        P(em, PM.smoke[1], tr.HitPos + d * (10 + math.random() * 30) + Vector(0, 0, 3), 14, 60, 90, 0, 1.2,
-                            d * (150 + 300 * c) + Vector(0, 0, 20), Color(150, 140, 125), Vector(0, 0, 15), 2, 0, 0, math.random() * 360)
-                    end
-                    endEmitter(em)
-                end
-            end
-        end
-    end
 
     if now < FX.smokeUntil and now >= FX.nextVent and fxBudget() then
         FX.nextVent = now + 0.06
@@ -2024,24 +1962,6 @@ if IS_OWNER then
     hook.add("drawhud", "dr_hud", function()
         local w, h = render.getResolution()
         local cyan, dim, dark = Color(40, 230, 255, 235), Color(40, 150, 180, 220), Color(4, 15, 24, 210)
-        if PULSE_SCREEN_FLASH and IS_OWNER then
-            local c = FX.charge or 0
-            if c > 0 then
-                local a = math.floor(110 * c * c)
-                for i = 1, 4 do
-                    local th = i * (10 + 30 * c)
-                    render.setColor(Color(40, 170, 255, math.floor(a / i)))
-                    render.drawRect(0, 0, w, th)
-                    render.drawRect(0, h - th, w, th)
-                    render.drawRect(0, th, th, h - th * 2)
-                    render.drawRect(w - th, th, th, h - th * 2)
-                end
-            end
-            if FX.flash > 0 then
-                render.setColor(Color(200, 240, 255, math.floor(200 * FX.flash * FX.flash)))
-                render.drawRect(0, 0, w, h)
-            end
-        end
         render.setFont(smallFont)
         render.setColor(dark)
         render.drawRect(24, h - 116, 282, 92)
@@ -2270,13 +2190,14 @@ local function drawChargeSparks(now)
     drawSparkArcs(CHARGE_SP.arcs, 1, DR.unit * DR.k)
 end
 
-local matBeam = material.create("UnlitGeneric")
-matBeam:setTexture("$basetexture", "effects/laser1")
-matBeam:setInt("$flags", 16 + 32 + 64 + 128 + 8192)
-matBeam:setInt("$translucent", 1)
-matBeam:setInt("$additive", 1)
-matBeam:setInt("$vertexcolor", 1)
-matBeam:setInt("$vertexalpha", 1)
+local pulseBeamMat = material.create("UnlitGeneric")
+pulseBeamMat:setTexture("$basetexture", "sprites/light_glow02_add")
+pulseBeamMat:setInt("$flags", 16 + 32 + 64 + 128 + 8192)
+pulseBeamMat:setInt("$translucent", 1)
+pulseBeamMat:setInt("$additive", 1)
+pulseBeamMat:setInt("$vertexcolor", 1)
+pulseBeamMat:setInt("$vertexalpha", 1)
+local matBeam = pulseBeamMat
 
 local function beam(a, b, width, col)
     local ok = pcall(function()
@@ -2284,7 +2205,6 @@ local function beam(a, b, width, col)
         render.setColor(col)
         render.draw3DBeam(a, b, width, 0, 1)
     end)
-    -- Keep the bolt visible even if a server's Starfall fork lacks textured beams.
     if not ok then
         pcall(function()
             render.setColor(col)
@@ -2293,228 +2213,35 @@ local function beam(a, b, width, col)
     end
 end
 
-local function makeTranslucentMaterial(texture)
-    local mat = material.create("UnlitGeneric")
-    mat:setTexture("$basetexture", texture)
-    mat:setInt("$flags", 16 + 32 + 64 + 128 + 8192)
-    mat:setInt("$translucent", 1)
-    mat:setInt("$additive", 1)
-    mat:setInt("$vertexcolor", 1)
-    mat:setInt("$vertexalpha", 1)
-    return mat
-end
-local function fallbackPulseMaterial()
-    return makeTranslucentMaterial("sprites/light_glow02_add")
-end
-local pulseFallback = fallbackPulseMaterial()
-local function makePulseMaterial(texture)
-    local ok, loaded = pcall(material.load, texture)
-    if not (ok and loaded) then return pulseFallback end
-    -- Build our own additive material so render-set alpha is honored by the ring and beam.
-    return makeTranslucentMaterial(texture)
-end
-local pulseMats = {
-    blueCore = makePulseMaterial("sprites/physcannon_bluecore2b"),
-    tpBeam = makePulseMaterial("sprites/tp_beam001"),
-    spark = makePulseMaterial("sprites/xspark1"),
-    blueShaft = makePulseMaterial("sprites/blueshaft1"),
-    magic = makePulseMaterial("sprites/magic"),
-    blackBall = makePulseMaterial("sprites/strider_blackball"),
-    striderBeam = makePulseMaterial("sprites/strider_bluebeam"),
-}
-local function pulseSprite(pos, size, mat, color)
+local function pulseBeamPass(a, b, width, color)
     pcall(function()
-        render.setMaterial(mat)
+        render.setMaterial(pulseBeamMat)
+        render.setColor(color)
+        render.draw3DBeam(a, b, width, 0, 1)
+    end)
+end
+local function pulseSprite(pos, size, color)
+    pcall(function()
+        render.setMaterial(pulseBeamMat)
         render.draw3DSprite(pos, size, size, color)
     end)
 end
-
-pulseMats.ring = makePulseMaterial("effects/select_ring")
-pulseMats.glow = makePulseMaterial("sprites/light_glow02_add")
-pulseMats.flare = makePulseMaterial("effects/blueflare1")
-pulseMats.laser = makePulseMaterial("effects/laser1")
-
-local function drawRing(ctr, a, b, r, spin, col)
-    local ca, sa = math.cos(spin) * r, math.sin(spin) * r
-    local x = a * ca + b * sa
-    local y = b * ca - a * sa
-    pcall(function()
-        render.setMaterial(pulseMats.ring)
-        render.setColor(col)
-        render.draw3DQuad(ctr - x - y, ctr - x + y, ctr + x + y, ctr + x - y)
-    end)
-end
-
-local function lightAt(pos, size, bright, col)
-    if FX.noLight then return end
-    local ok = pcall(function()
-        local l = light.create(pos, size, bright, col)
-        l:draw()
-    end)
-    if not ok then FX.noLight = true end
-end
-
-local function scrollBeam(a, b, width, mat, col, speed, tile)
-    pcall(function()
-        render.setMaterial(mat)
-        render.setColor(col)
-        local t = timer.curtime() * speed
-        render.draw3DBeam(a, b, width, -t, (b - a):getLength() / tile - t)
-    end)
-end
-
-local function drawPulseFX(now)
-    local u = DR.unit * DR.k
-
-    local c = FX.charge
-    if c > 0 and DR.ready then
-        local mz = muzzlePos()
-        local fwd, rt, up = DR.ang:getForward(), DR.ang:getRight(), DR.ang:getUp()
-        local pulse = 0.85 + 0.15 * math.sin(now * 45)
-        local orb = u * (0.12 + 0.95 * c * c) * pulse
-        pulseSprite(DR.pos, u * (1.0 + 2.4 * c), pulseMats.glow, Color(30, 130, 255, 60 + 120 * c))
-        pulseSprite(mz, orb * 5, pulseMats.glow, Color(40, 150, 255, 120 + 100 * c))
-        pulseSprite(mz, orb * 2.6, pulseMats.flare, Color(130, 225, 255, 255))
-        pulseSprite(mz, orb * 1.1, pulseMats.spark, Color(255, 255, 255, 255))
-
-        local rr = u * (1.3 - 0.8 * c)
-        local ra = 80 + 170 * c
-        drawRing(mz + fwd * u * 0.1, rt, up, rr, now * 5, Color(80, 200, 255, ra))
-        drawRing(mz, fwd, up, rr * 1.1, -now * 7, Color(120, 220, 255, ra))
-        drawRing(mz, fwd, rt, rr * 0.9, now * 9, Color(60, 170, 255, ra))
-
-        if now >= FX.streakT then
-            FX.streakT = now + 0.03
-            FX.streaks = {}
-            for i = 1, detail(4 + 12 * c) do FX.streaks[i] = { randUnit(), 1 + math.random() * 2.2 } end
-        end
-        pcall(function()
-            render.setMaterial(pulseMats.tpBeam)
-            render.setColor(Color(120, 225, 255, 200))
-            for _, streak in ipairs(FX.streaks) do
-                render.draw3DBeam(mz + streak[1] * (streak[2] * u), mz + streak[1] * (streak[2] * u * 0.55), u * 0.05, 0, 1)
-            end
-        end)
-        lightAt(mz, 150 + 500 * c, 1 + 4 * c, Color(60, 160, 255))
-    end
-
+local function drawPulseBeam(now)
     local B = PULSE_BEAM
     local age = now - B.t
-    if B.start and age >= 0 and age < PULSE_BEAM_TIME then
-        local A, Bp = B.start, B.finish
-        local t = age / PULSE_BEAM_TIME
-        local fade = 1 - t
-        local snap = 1 + 1.2 * math.max(0, 1 - age * 9)
-        local flicker = 0.85 + 0.15 * math.sin(now * 90)
-        local width = math.max(58, u * 0.58) * flicker * snap * (fade ^ 0.6)
-        local dirV = Bp - A
-        local len = dirV:getLength()
-        if len > 1 then
-            local dir = dirV * (1 / len)
-            local ra, rb = basisOf(dir)
-            scrollBeam(A, Bp, width * 4.6, pulseMats.striderBeam, Color(5, 45, 255, 70 * fade), 1.5, 512)
-            scrollBeam(A, Bp, width * 3.0, pulseMats.blueCore, Color(15, 115, 255, 150 * fade), -2.0, 512)
-            scrollBeam(A, Bp, width * 1.7, pulseMats.tpBeam, Color(0, 210, 255, 230 * fade), 6, 400)
-            scrollBeam(A, Bp, width * 0.9, pulseMats.blueShaft, Color(150, 245, 255, 250 * fade), 10, 300)
-            scrollBeam(A, Bp, width * 0.36, pulseMats.magic, Color(255, 255, 255, 255 * fade), 14, 200)
-
-            local segs = math.min(72, math.max(14, math.floor(len / 110)))
-            local spin = now * 14
-            for h = 0, 1 do
-                pcall(function()
-                    render.setMaterial(pulseMats.laser)
-                    render.setColor(h == 0 and Color(60, 210, 255, 230 * fade) or Color(210, 245, 255, 230 * fade))
-                    local prev
-                    for i = 0, segs do
-                        local dist = (i / segs) * len
-                        local phi = dist * 0.012 - spin + h * math.pi
-                        local r = width * (0.7 + 1.8 * t) * math.min(1, dist / 250)
-                        local pos = A + dir * dist + (ra * math.cos(phi) + rb * math.sin(phi)) * r
-                        if prev then render.draw3DBeam(prev, pos, width * 0.22, 0, 1) end
-                        prev = pos
-                    end
-                end)
-            end
-
-            if now - FX.arcT > 0.05 then
-                FX.arcT = now
-                FX.arcs = {}
-                for i = 1, detail(9) do
-                    local f = (i % 3 == 0 and B.hit) and (1 - math.random() * math.min(0.1, 300 / len)) or math.random()
-                    local cur = A + dir * (len * f)
-                    local d1 = ra * (math.random() * 2 - 1) + rb * (math.random() * 2 - 1)
-                    d1 = d1:getLength() > 0.01 and d1:getNormalized() or ra
-                    local length = width * (1.5 + math.random() * 3)
-                    local pts = { cur }
-                    for j = 1, 5 do
-                        cur = cur + d1 * (length / 5) + randUnit() * (length * 0.18) + dir * ((math.random() * 2 - 1) * length * 0.1)
-                        pts[#pts + 1] = cur
-                    end
-                    FX.arcs[i] = pts
-                end
-            end
-            if t < 0.8 then
-                pcall(function()
-                    for _, pts in ipairs(FX.arcs) do
-                        render.setMaterial(pulseMats.laser)
-                        render.setColor(Color(120, 220, 255, 220 * fade))
-                        for j = 1, #pts - 1 do render.draw3DBeam(pts[j], pts[j + 1], width * 0.12, 0, 1) end
-                        render.setColor(Color(255, 255, 255, 255 * fade))
-                        for j = 1, #pts - 1 do render.draw3DBeam(pts[j], pts[j + 1], width * 0.04, 0, 1) end
-                    end
-                end)
-            end
-
-            local nR = math.min(14, math.floor(len / 350))
-            for i = 1, nR do
-                local dist = (i / nR) * len
-                local ringAge = age - dist / 30000
-                if ringAge > 0 and ringAge < 0.4 then
-                    local k = ringAge / 0.4
-                    drawRing(A + dir * dist, ra, rb, width * (1.5 + 4 * k), 0, Color(60, 190, 255, 200 * (1 - k)))
-                end
-            end
-        end
-
-        local mid = (A + Bp) * 0.5
-        pulseSprite(A, width * 3.0 + u * 2 * math.max(0, 1 - age * 6), pulseMats.glow, Color(100, 200, 255, 255 * fade))
-        pulseSprite(A, width * 3.0, pulseMats.spark, Color(100, 240, 255, 255 * fade))
-        pulseSprite(mid, width * 1.7, pulseMats.magic, Color(40, 180, 255, 180 * fade))
-        pulseSprite(Bp, width * 4.0, pulseMats.blackBall, Color(40, 150, 255, 230 * fade))
-        pulseSprite(Bp, width * 2.1, pulseMats.spark, Color(230, 250, 255, 255 * fade))
-    end
-
-    if FX.impactPos then
-        local ia = now - FX.impactT
-        if ia >= 0 and ia < 0.6 then
-            local k = ia / 0.6
-            local alpha = 255 * (1 - k) * (1 - k)
-            pulseSprite(FX.impactPos, 500 + 2500 * k, pulseMats.glow, Color(60, 170, 255, alpha))
-            pulseSprite(FX.impactPos, 300 + 900 * k, pulseMats.flare, Color(220, 245, 255, alpha))
-        end
-    end
-
-    for i = #FX.rings, 1, -1 do
-        local R = FX.rings[i]
-        local ringAge = now - R.t0
-        if ringAge >= R.life then
-            table.remove(FX.rings, i)
-        elseif ringAge >= 0 then
-            local k = ringAge / R.life
-            local e = 1 - (1 - k) ^ 3
-            local a, b = basisOf(R.n)
-            drawRing(R.pos, a, b, R.r0 + (R.r1 - R.r0) * e, 0, Color(R.col.r, R.col.g, R.col.b, R.col.a * (1 - k)))
-        end
-    end
-    for i = #FX.lights, 1, -1 do
-        local L = FX.lights[i]
-        local k = (now - L.t0) / L.life
-        if k >= 1 then
-            table.remove(FX.lights, i)
-        elseif k >= 0 then
-            lightAt(L.pos, L.size * (1 - k), L.bright * (1 - k), L.col)
-        end
-    end
+    if not B.start or age < 0 or age >= PULSE_BEAM_TIME then return end
+    local fade = 1 - age / PULSE_BEAM_TIME
+    local flicker = 0.82 + 0.18 * math.sin(now * 83)
+    local width = math.max(58, DR.unit * DR.k * 0.58) * flicker
+    pulseBeamPass(B.start, B.finish, width * 4.2, Color(5, 45, 255, 78 * fade))
+    pulseBeamPass(B.start, B.finish, width * 2.8, Color(15, 115, 255, 145 * fade))
+    pulseBeamPass(B.start, B.finish, width * 1.65, Color(0, 210, 255, 225 * fade))
+    pulseBeamPass(B.start, B.finish, width * 0.85, Color(150, 245, 255, 250 * fade))
+    pulseBeamPass(B.start, B.finish, width * 0.34, Color(245, 255, 255, 255 * fade))
+    local midpoint = (B.start + B.finish) * 0.5
+    pulseSprite(B.start, width * 3.0, Color(100, 240, 255, 255 * fade))
+    pulseSprite(midpoint, width * 1.7, Color(40, 180, 255, 180 * fade))
+    pulseSprite(B.finish, width * 2.1, Color(230, 250, 255, 255 * fade))
 end
 
 local trail = {}
@@ -2550,7 +2277,7 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
 
     drawChargeSparks(now)
 
-    drawPulseFX(now)
+    drawPulseBeam(now)
 end)
 
 ---------------- main loop ----------------
