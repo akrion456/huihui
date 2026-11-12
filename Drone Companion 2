@@ -143,7 +143,7 @@ SHIELD_REGEN_DELAY = 3
 PULSE_CHARGE_TIME = 3
 PULSE_RANGE = 10000
 PULSE_DAMAGE = 1200
-PULSE_SOUND = "ambient/energy/zap9.wav"
+PULSE_SOUND = "weapons/physcannon/superphys_launch1.wav"
 PULSE_CHARGE_SOUND = "ambient/energy/zap1.wav"
 SPARK_SOUNDS = {
     "ambient/energy/newspark01.wav", "ambient/energy/newspark02.wav", "ambient/energy/newspark03.wav",
@@ -719,7 +719,9 @@ if SERVER then
         local start = SV.dpos + SV.dang:getForward() * (SIZE * SV.dk * 0.55)
         local finish = start + dir * PULSE_RANGE
         local tr
-        local traced = pcall(function() tr = trace.line(start, finish, ME) end)
+        local filter = { ME }
+        if valid(seat) then filter[2] = seat end
+        local traced = pcall(function() tr = trace.line(start, finish, filter) end)
         if traced and tr and tr.HitPos then finish = tr.HitPos end
         if traced and tr then
             pcall(function()
@@ -816,7 +818,7 @@ local DR = {
     mode = "follow", stage = "", sub = "", stT = 0,
     camBlend = 0, camT = 0, camStyle = "ctrl",
     lock = false, seat = false, holdPos = Vector(), netT = 0, lkT = 0, snT = 0, bodyStart = Vector(),
-    rideYaw = 0, eyeOff = Vector(0, 0, RIDE_EYE_UP), viewAng = ME:getEyeAngles(),
+    rideYaw = 0, eyeOff = Vector(0, 0, RIDE_EYE_UP), viewAng = ME:getEyeAngles(), aimOrigin = ME:getEyePos(),
     hidden = false, ready = false, charging = false, chargeT = 0, pulseFired = false, recoil = 0,
 }
 local REM = { mode = 0, kT = 1, pos = Vector(), vel = Vector(), ang = Angle(), av = Vector(), t = -100, charging = false, charge = 0 }
@@ -861,9 +863,22 @@ net.receive("dr_destroy", function()
 end)
 
 local PULSE_BEAM = { start = nil, finish = nil, t = 0 }
+local function pulseEffect(pos, normal, effectName, magnitude, scale)
+    pcall(function()
+        local fx = effect.create()
+        fx:setOrigin(pos)
+        fx:setNormal(normal)
+        fx:setMagnitude(magnitude)
+        fx:setScale(scale)
+        fx:play(effectName)
+    end)
+end
 net.receive("dr_shot", function()
     PULSE_BEAM.start, PULSE_BEAM.finish = net.readVector(), net.readVector()
     PULSE_BEAM.t = timer.curtime()
+    local dir = (PULSE_BEAM.finish - PULSE_BEAM.start):getNormalized()
+    pulseEffect(PULSE_BEAM.start, dir, "ManhackSparks", 3, 1.4)
+    pulseEffect(PULSE_BEAM.finish, dir * -1, "cball_explode", 4, 2.2)
 end)
 
 ---------------- net (owner side) ----------------
@@ -1678,6 +1693,7 @@ if IS_OWNER then
     ---------------- camera ----------------
     hook.add("calcview", "dr_cam", function(pos, ang, fov, znear, zfar)
         DR.viewAng = Angle(ang.p, ang.y, ang.r)
+        DR.aimOrigin = pos
         if DR.camBlend <= 0.001 then return end
         local target, showSelf
         if DR.camStyle == "ctrl" then
@@ -1688,6 +1704,7 @@ if IS_OWNER then
             showSelf = false
         end
         local o = pos + (target - pos) * ease(DR.camBlend)
+        DR.aimOrigin = o
         return { origin = o, angles = ang, fov = fov, znear = znear, zfar = zfar, drawviewer = showSelf }
     end)
 
@@ -1803,6 +1820,7 @@ local function startBurst(now, relayed)
     for i = 1, math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX) do SP.arcs[i] = newArc() end
     SP.reroll = now + rnd(0.04, 0.09)
     SP.nextT = IS_OWNER and (now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)) or nil
+    pulseEffect(DR.pos, Vector(0, 0, 1), "ManhackSparks", 2, 0.8)
     if IS_OWNER and not relayed then
         sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)])
         net.start("dr_spark")
@@ -1929,17 +1947,18 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
         end
     end
 
-    -- Sprite-only pulse bolt: the jagged lgtning texture advances from the drone's muzzle.
-    if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.55 then
-        local age = now - PULSE_BEAM.t
-        local fade = 1 - age / 0.55
-        local delta = PULSE_BEAM.finish - PULSE_BEAM.start
-        local travel = clamp(age / 0.4, 0, 1)
-        local head = PULSE_BEAM.start + delta * travel
-        local tail = PULSE_BEAM.start + delta * math.max(0, travel - 0.18)
-        local pulseWidth = math.max(14, DR.unit * DR.k * 0.22) * fade
-        spriteLightning(tail, head, pulseWidth, Color(0, 175, 255, 245 * fade), 18, now * 24)
-        spriteLightning(tail, head, pulseWidth * 0.4, Color(235, 255, 255, 255 * fade), 18, now * 29 + 2)
+    -- Strong full-length pulse beam: blue glow shell, cyan body, white-hot core.
+    if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.42 then
+        local fade = 1 - (now - PULSE_BEAM.t) / 0.42
+        local flicker = 0.82 + 0.18 * math.sin(now * 83)
+        local width = math.max(20, DR.unit * DR.k * 0.24) * flicker
+        beam(PULSE_BEAM.start, PULSE_BEAM.finish, width * 2.8, Color(10, 80, 255, 95 * fade))
+        beam(PULSE_BEAM.start, PULSE_BEAM.finish, width, Color(0, 210, 255, 245 * fade))
+        beam(PULSE_BEAM.start, PULSE_BEAM.finish, width * 0.34, Color(240, 255, 255, 255 * fade))
+        pcall(function()
+            render.setMaterial(matLightningSprite)
+            render.draw3DSprite(PULSE_BEAM.start, width * 2.2, width * 2.2, Color(150, 240, 255, 245 * fade))
+        end)
     end
 end)
 
@@ -1960,10 +1979,17 @@ hook.add("think", "dr_think", function()
             DR.chargeSparkIndex = DR.chargeSparkIndex + 1
         end
         if DR.charging and not DR.pulseFired and now - DR.chargeT >= PULSE_CHARGE_TIME then
-            local eye = ME:getEyeAngles()
-            local aim = trace.line(ME:getEyePos(), ME:getEyePos() + eye:getForward() * PULSE_RANGE, ME)
+            local eye = DR.viewAng
+            local viewOrigin = DR.aimOrigin or ME:getEyePos()
+            local traceFilter = { ME }
+            pcall(function()
+                local vehicle = ME:getVehicle()
+                if vehicle and vehicle:isValid() then traceFilter[2] = vehicle end
+            end)
+            local rayEnd = viewOrigin + eye:getForward() * PULSE_RANGE
+            local aim = trace.line(viewOrigin, rayEnd, traceFilter)
             local origin = DR.pos + DR.ang:getForward() * (DR.unit * DR.k * 0.52)
-            local target = aim.HitPos or (ME:getEyePos() + eye:getForward() * PULSE_RANGE)
+            local target = aim.HitPos or rayEnd
             local dir = target - origin
             if dir:getLengthSqr() > 0.01 then dir = dir:getNormalized() else dir = eye:getForward() end
             PULSE_BEAM.start, PULSE_BEAM.finish, PULSE_BEAM.t = origin, target, now
