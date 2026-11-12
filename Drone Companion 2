@@ -2272,7 +2272,11 @@ end
 
 local matBeam = material.create("UnlitGeneric")
 matBeam:setTexture("$basetexture", "effects/laser1")
-matBeam:setInt("$flags", 16 + 32 + 128 + 8192)
+matBeam:setInt("$flags", 16 + 32 + 64 + 128 + 8192)
+matBeam:setInt("$translucent", 1)
+matBeam:setInt("$additive", 1)
+matBeam:setInt("$vertexcolor", 1)
+matBeam:setInt("$vertexalpha", 1)
 
 local function beam(a, b, width, col)
     local ok = pcall(function()
@@ -2289,18 +2293,25 @@ local function beam(a, b, width, col)
     end
 end
 
-local function fallbackPulseMaterial()
+local function makeTranslucentMaterial(texture)
     local mat = material.create("UnlitGeneric")
-    mat:setTexture("$basetexture", "vgui/white")
-    mat:setInt("$flags", 16 + 32 + 128 + 8192)
+    mat:setTexture("$basetexture", texture)
+    mat:setInt("$flags", 16 + 32 + 64 + 128 + 8192)
+    mat:setInt("$translucent", 1)
+    mat:setInt("$additive", 1)
+    mat:setInt("$vertexcolor", 1)
+    mat:setInt("$vertexalpha", 1)
     return mat
 end
-local pulseFallback = material.load("sprites/light_glow02_add") or fallbackPulseMaterial()
+local function fallbackPulseMaterial()
+    return makeTranslucentMaterial("sprites/light_glow02_add")
+end
+local pulseFallback = fallbackPulseMaterial()
 local function makePulseMaterial(texture)
-    local ok, mat = pcall(material.load, texture)
-    if ok and mat then return mat end
-    -- A missing VMT becomes a pink/black checker; use a known-safe glow instead.
-    return pulseFallback
+    local ok, loaded = pcall(material.load, texture)
+    if not (ok and loaded) then return pulseFallback end
+    -- Build our own additive material so render-set alpha is honored by the ring and beam.
+    return makeTranslucentMaterial(texture)
 end
 local pulseMats = {
     blueCore = makePulseMaterial("sprites/physcannon_bluecore2b"),
