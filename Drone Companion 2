@@ -914,11 +914,12 @@ local FX = {
     noLight = false, impactT = -100, impactPos = nil,
 }
 local PM = {
-    smoke = { "particle/smokestack", "particle/particle_smokegrenade" },
+    -- Stick to stock textures already used by the beam; avoid missing-material checkerboards.
+    smoke = { "particle/particle_smokegrenade", "particle/particle_smokegrenade" },
     glow = "sprites/light_glow02_add",
     flare = "effects/blueflare1",
-    spark = "effects/spark",
-    fire = "effects/fire_cloud1",
+    spark = "sprites/xspark1",
+    fire = "sprites/physcannon_bluecore2b",
 }
 
 local function randUnit()
@@ -2288,11 +2289,18 @@ local function beam(a, b, width, col)
     end
 end
 
-local function makePulseMaterial(texture)
+local function fallbackPulseMaterial()
     local mat = material.create("UnlitGeneric")
-    mat:setTexture("$basetexture", texture)
+    mat:setTexture("$basetexture", "vgui/white")
     mat:setInt("$flags", 16 + 32 + 128 + 8192)
     return mat
+end
+local pulseFallback = material.load("sprites/light_glow02_add") or fallbackPulseMaterial()
+local function makePulseMaterial(texture)
+    local ok, mat = pcall(material.load, texture)
+    if ok and mat then return mat end
+    -- A missing VMT becomes a pink/black checker; use a known-safe glow instead.
+    return pulseFallback
 end
 local pulseMats = {
     blueCore = makePulseMaterial("sprites/physcannon_bluecore2b"),
