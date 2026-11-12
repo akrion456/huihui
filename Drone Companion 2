@@ -38,6 +38,7 @@ KEY_SHIELD_D = 20   -- J
 KEY_CONTROL  = 21   -- K
 KEY_RIDE     = 22   -- L
 KEY_MENU     = 23   -- M
+KEY_ENTER    = 64   -- Enter (Starfall KEY.ENTER)
 KEY_PULSE    = 32   -- V
 
 -- sounds (played ONCE per press, on and off)
