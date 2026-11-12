@@ -710,7 +710,7 @@ if SERVER then
     end)
 
     net.receive("dr_pulse", function(_, ply)
-        if ply ~= ME or SV.mode ~= 2 or timer.curtime() - lastPulse < 1 then return end
+        if ply ~= ME or timer.curtime() - lastPulse < 1 then return end
         lastPulse = timer.curtime()
         local dir = net.readVector()
         local len = dir:getLength()
@@ -1817,8 +1817,42 @@ local matBeam = material.create("UnlitGeneric")
 matBeam:setTexture("$basetexture", "effects/laser1")
 matBeam:setInt("$flags", 16 + 32 + 128 + 8192)
 local matLightningSprite = material.create("UnlitGeneric")
-matLightningSprite:setTexture("$basetexture", "sprites/physbeam")
+matLightningSprite:setTexture("$basetexture", "sprites/lgtning")
 matLightningSprite:setInt("$flags", 16 + 32 + 128 + 8192)
+local function spriteLightning(a, b, width, col, pieces, phase)
+    local delta = b - a
+    local length = delta:getLength()
+    if length < 0.5 then
+        pcall(function()
+            render.setMaterial(matLightningSprite)
+            render.draw3DSprite(a, width, width * 2, col)
+        end)
+        return
+    end
+    local side = Vector(-delta.y, delta.x, 0)
+    if side:getLengthSqr() < 0.001 then side = Vector(0, 1, 0) end
+    side = side:getNormalized()
+    local prev = a
+    for i = 1, pieces do
+        local t = i / pieces
+        local point = a + delta * t
+        if i < pieces then
+            local wave = (i + phase) * 2.4
+            point = point + side * (math.sin(wave) * width * 0.55)
+                + Vector(0, 0, math.cos(wave * 1.37) * width * 0.28)
+        end
+        local mid = (prev + point) * 0.5
+        local segLen = (point - prev):getLength()
+        local core = Color(230, 250, 255, col.a)
+        pcall(function()
+            render.setMaterial(matLightningSprite)
+            render.draw3DSprite(mid, math.max(3, width), math.max(6, segLen * 1.8), col)
+            render.draw3DSprite(point, math.max(2, width * 0.42), math.max(4, width * 1.1), core)
+        end)
+        prev = point
+    end
+end
+
 local function beam(a, b, width, col)
     local ok = pcall(function()
         render.setMaterial(matBeam)
@@ -1874,12 +1908,7 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
                     local seg = wp[i] - wp[i - 1]
                     local mid = (wp[i] + wp[i - 1]) * 0.5
                     local boltCol = Color(SPARK_COLOR.r, SPARK_COLOR.g, SPARK_COLOR.b, 230 * fade)
-                    pcall(function()
-                        render.setMaterial(matLightningSprite)
-                        render.draw3DSprite(mid, math.max(5, u * 0.12), math.max(8, seg:getLength() * 1.5), boltCol)
-                    end)
-                    beam(wp[i - 1], wp[i], math.max(1, u * 0.018), boltCol)
-                    beam(wp[i - 1], wp[i], math.max(0.5, u * 0.006), Color(SPARK_CORE.r, SPARK_CORE.g, SPARK_CORE.b, 255 * fade))
+                    spriteLightning(wp[i - 1], wp[i], math.max(5, u * 0.12), boltCol, 3, i + now * 7)
                 end
             end
         end
@@ -1895,17 +1924,22 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
             local base = DR.pos + Vector(math.cos(a) * radius * 0.58, math.sin(a) * radius * 0.58, math.sin(a * 2) * radius * 0.25)
             local tip = DR.pos + Vector(math.cos(a) * radius * (1.1 + charge * 0.25), math.sin(a) * radius * (1.1 + charge * 0.25), math.sin(a * 3 + now * 6) * radius * 0.8)
             local mid = (base + tip) * 0.5 + Vector(math.sin(now * 19 + rod) * radius * 0.14, math.cos(now * 17 + rod) * radius * 0.14, math.sin(now * 23 + rod) * radius * 0.14)
-            beam(base, mid, 3, Color(20, 190, 255, 235))
-            beam(mid, tip, 2, Color(175, 245, 255, 250))
+            spriteLightning(base, mid, math.max(5, radius * 0.07), Color(25, 190, 255, 240), 4, rod + now * 8)
+            spriteLightning(mid, tip, math.max(4, radius * 0.045), Color(175, 245, 255, 250), 4, rod + now * 11)
         end
     end
 
-    -- Pulse projectile is a bright, tapered-looking multi-pass beam.
-    if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.45 then
-        local fade = 1 - (now - PULSE_BEAM.t) / 0.45
-        beam(PULSE_BEAM.start, PULSE_BEAM.finish, 34 * fade, Color(20, 110, 255, 110 * fade))
-        beam(PULSE_BEAM.start, PULSE_BEAM.finish, 16 * fade, Color(0, 220, 255, 230 * fade))
-        beam(PULSE_BEAM.start, PULSE_BEAM.finish, 5 * fade, Color(235, 255, 255, 255 * fade))
+    -- Sprite-only pulse bolt: the jagged lgtning texture advances from the drone's muzzle.
+    if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.55 then
+        local age = now - PULSE_BEAM.t
+        local fade = 1 - age / 0.55
+        local delta = PULSE_BEAM.finish - PULSE_BEAM.start
+        local travel = clamp(age / 0.4, 0, 1)
+        local head = PULSE_BEAM.start + delta * travel
+        local tail = PULSE_BEAM.start + delta * math.max(0, travel - 0.18)
+        local pulseWidth = math.max(14, DR.unit * DR.k * 0.22) * fade
+        spriteLightning(tail, head, pulseWidth, Color(0, 175, 255, 245 * fade), 18, now * 24)
+        spriteLightning(tail, head, pulseWidth * 0.4, Color(235, 255, 255, 255 * fade), 18, now * 29 + 2)
     end
 end)
 
