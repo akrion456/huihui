@@ -127,9 +127,9 @@ NET_RATE_RIDE = 0.01
 NET_RATE_CTRL = 0.5
 
 -- sparks
-SPARK_MIN_DELAY = 0.2
+SPARK_MIN_DELAY = 5
 SPARK_MAX_DELAY = 10
-SPARK_DURATION = 0.55
+SPARK_DURATION = 0.65
 SPARK_ARCS_MIN = 2
 SPARK_ARCS_MAX = 4
 SPARK_SEGMENTS = 7
@@ -183,16 +183,17 @@ if SERVER then
         [PULSE_SOUND] = true, [PULSE_CHARGE_SOUND] = true,
     }
     for _, path in ipairs(SPARK_SOUNDS) do ALLOWED_SOUNDS[path] = true end
-    local function relaySound(path, pos)
+    local function relaySound(path, pos, volume)
         net.start("dr_sfx")
         net.writeString(path)
         net.writeVector(pos)
+        net.writeFloat(volume or SFX_VOLUME)
         net.send()
     end
     net.receive("dr_sfx", function(_, ply)
         if ply ~= ME then return end
-        local path, pos = net.readString(), net.readVector()
-        if ALLOWED_SOUNDS[path] then relaySound(path, pos) end
+        local path, pos, volume = net.readString(), net.readVector(), net.readFloat()
+        if ALLOWED_SOUNDS[path] then relaySound(path, pos, volume) end
     end)
 
     net.receive("dr_spark", function(_, ply)
@@ -734,7 +735,7 @@ if SERVER then
         net.writeVector(start)
         net.writeVector(finish)
         net.send()
-        relaySound(PULSE_SOUND, start)
+        relaySound(PULSE_SOUND, start, SFX_VOLUME)
     end)
 
     hook.add("think", "dr_hp_regen", function()
@@ -813,7 +814,7 @@ end
 local DR = {
     pos = ME:getPos() + Vector(0, 0, HOVER_HEIGHT), vel = Vector(), yaw = ME:getEyeAngles().y,
     aimPitch = 0, tiltP = 0, tiltR = 0, ang = Angle(),
-    top = 10, bot = -10, unit = SIZE, fitHalf = SIZE / 2,
+    top = 10, bot = -10, unit = SIZE, fitHalf = SIZE / 2, sparkHalf = Vector(SIZE / 2, SIZE / 2, SIZE / 2),
     k = 1, kT = 1, appliedK = -1,
     mode = "follow", stage = "", sub = "", stT = 0,
     camBlend = 0, camT = 0, camStyle = "ctrl",
@@ -830,21 +831,22 @@ sndHolo:setNoDraw(true)
 
 ---------------- sound (one shot) ----------------
 local sfxTokens = {}
-local function sfx(path)
+local function sfx(path, volume)
     if not IS_OWNER then return end
     net.start("dr_sfx")
     net.writeString(path)
     net.writeVector(DR.pos)
+    net.writeFloat(volume or SFX_VOLUME)
     net.send()
 end
 
 net.receive("dr_sfx", function()
-    local path, pos = net.readString(), net.readVector()
+    local path, pos, volume = net.readString(), net.readVector(), net.readFloat()
     sfxTokens[path] = (sfxTokens[path] or 0) + 1
     local token = sfxTokens[path]
     pcall(function()
         sndHolo:setPos(pos)
-        sndHolo:emitSound(path, SFX_LEVEL, 100, SFX_VOLUME)
+        sndHolo:emitSound(path, SFX_LEVEL, 100, volume)
         if SFX_MAX_TIME then
             timer.simple(SFX_MAX_TIME, function()
                 if sfxTokens[path] == token then pcall(function() sndHolo:stopSound(path) end) end
@@ -1319,6 +1321,7 @@ local function buildJob()
     DR.bot = (mn.z - ctr.z) * s
     DR.unit = maxdim * s
     DR.fitHalf = DR.unit / 2
+    DR.sparkHalf = Vector(size.x * s * 0.5, size.y * s * 0.5, size.z * s * 0.5)
 
     local tris = makeTris(V, VT, VN, FL)
     local triCount = math.floor(#tris / 3)
@@ -1824,46 +1827,140 @@ if IS_OWNER then
 end
 
 ---------------- lightning / trail rendering ----------------
-local SP = { nextT = nil, t0 = 0, active = false, arcs = {}, reroll = 0 }
+local SP = { nextT = nil, active = false, endT = 0, flick = 0, arcs = {} }
 
 local function randDir()
-    local z = math.random() * 2 - 1
-    local a = math.random() * math.pi * 2
-    local r = math.sqrt(1 - z * z)
-    return Vector(r * math.cos(a), r * math.sin(a), z)
+    local d = Vector(math.random() * 2 - 1, math.random() * 2 - 1, math.random() * 2 - 1)
+    if d:getLengthSqr() < 0.01 then d = Vector(0, 0, 1) end
+    return d:getNormalized()
 end
 
-local function newArc()
-    local R = DR.fitHalf
-    local s = randDir() * R * rnd(0.35, 1)
-    local e = s + randDir() * R * rnd(0.7, 1.6)
-    local pts, n = {}, SPARK_SEGMENTS
-    for i = 0, n do
-        local t = i / n
-        local p = s + (e - s) * t
-        if i > 0 and i < n then p = p + randDir() * R * 0.18 * (1 - math.abs(t - 0.5) * 0.8) end
-        pts[#pts + 1] = p
+-- Points are generated on an ellipsoid hugging the drone model.
+local function surfacePoint(d)
+    d = d:getNormalized()
+    local h = DR.sparkHalf
+    return Vector(d.x * h.x, d.y * h.y, d.z * h.z) * 0.95
+end
+
+local function makeArc()
+    local d1 = randDir()
+    local a = surfacePoint(d1)
+    local b
+    if math.random() < 0.65 then
+        b = surfacePoint(d1 + randDir() * 0.9)
+    else
+        b = a + (d1 * 0.6 + randDir() * 0.6) * DR.unit * 0.35
     end
-    return pts
+
+    local dir = b - a
+    local jit = math.max(dir:getLength() * 0.18, DR.unit * 0.02)
+    local pts = { a }
+    for i = 1, SPARK_SEGMENTS - 1 do
+        local f = i / SPARK_SEGMENTS
+        pts[#pts + 1] = a + dir * f + randDir() * (jit * math.random())
+    end
+    pts[#pts + 1] = b
+    return { pts = pts, k = 0.5 + math.random() * 0.5 }
 end
 
-local function startBurst(now, relayed)
+local function sparkDelay()
+    return rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)
+end
+
+local function playSpark()
+    if IS_OWNER then sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)], SPARK_VOLUME) end
+end
+
+local function startBurst(now)
     SP.active = true
-    SP.t0 = now
+    SP.endT = now + SPARK_DURATION * (0.7 + math.random() * 0.6)
+    SP.flick = 0
     SP.arcs = {}
-    for i = 1, math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX) do SP.arcs[i] = newArc() end
-    SP.reroll = now + rnd(0.04, 0.09)
-    SP.nextT = IS_OWNER and (now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)) or nil
-    pulseEffect(DR.pos, Vector(0, 0, 1), "ManhackSparks", 2, 0.8)
-    if IS_OWNER and not relayed then
-        sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)])
+    if IS_OWNER then
         net.start("dr_spark")
         net.send()
     end
+    playSpark()
 end
+
 net.receive("dr_spark", function()
     if not IS_OWNER then startBurst(timer.curtime(), true) end
 end)
+
+local function updateSparks(now)
+    if not DR.ready then return end
+    if not SP.active then
+        if not SP.nextT then SP.nextT = now + sparkDelay() end
+        if now >= SP.nextT then
+            startBurst(now)
+        end
+        return
+    end
+
+    if now >= SP.endT then
+        SP.active = false
+        SP.arcs = {}
+        SP.nextT = IS_OWNER and (now + sparkDelay()) or nil
+        return
+    end
+
+    if now >= SP.flick then
+        SP.flick = now + 0.04 + math.random() * 0.05
+        SP.arcs = {}
+        local n = math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX)
+        for i = 1, n do SP.arcs[#SP.arcs + 1] = makeArc() end
+        if math.random() < 0.3 then playSpark() end
+    end
+end
+
+local function sparkFlatMat(flags)
+    local m = material.create("UnlitGeneric")
+    m:setInt("$flags", flags)
+    m:setTexture("$basetexture", "vgui/white")
+    return m
+end
+local glowMat = material.load("sprites/light_glow02_add") or sparkFlatMat(16 + 32 + 128 + 8192)
+
+local toWorld
+local function drawSparks(now)
+    if not SP.active then return end
+    local fade = clamp((SP.endT - now) / (SPARK_DURATION * 0.35), 0, 1)
+    local unit = DR.unit * DR.k
+    local step = math.max(unit * 0.04, 0.3)
+    local glowSz = unit * 0.12
+    local coreSz = unit * 0.045
+
+    render.setMaterial(glowMat)
+    local pulse = fade * (0.15 + math.random() * 0.15)
+    render.setColor(Color(SPARK_COLOR.r * pulse, SPARK_COLOR.g * pulse, SPARK_COLOR.b * pulse, 255))
+    render.drawSprite(DR.pos, unit * 1.2, unit * 1.2)
+
+    for _, arc in ipairs(SP.arcs) do
+        local k = fade * arc.k
+        local cg = Color(SPARK_COLOR.r * k, SPARK_COLOR.g * k, SPARK_COLOR.b * k, 255)
+        local cc = Color(SPARK_CORE.r * k, SPARK_CORE.g * k, SPARK_CORE.b * k, 255)
+        local w = {}
+        for i, p in ipairs(arc.pts) do w[i] = toWorld(p) end
+
+        for i = 1, #w - 1 do
+            local p1, p2 = w[i], w[i + 1]
+            local d = p2 - p1
+            local steps = math.max(1, math.ceil(d:getLength() / step))
+            for j = 0, steps - 1 do
+                local p = p1 + d * (j / steps)
+                render.setColor(cg)
+                render.drawSprite(p, glowSz, glowSz)
+                render.setColor(cc)
+                render.drawSprite(p, coreSz, coreSz)
+            end
+        end
+        render.setColor(cg)
+        render.drawSprite(w[1], glowSz * 2.2, glowSz * 2.2)
+        render.drawSprite(w[#w], glowSz * 1.6, glowSz * 1.6)
+        render.setColor(cc)
+        render.drawSprite(w[1], coreSz * 2.5, coreSz * 2.5)
+    end
+end
 
 local matBeam = material.create("UnlitGeneric")
 matBeam:setTexture("$basetexture", "effects/laser1")
@@ -1955,7 +2052,7 @@ end
 
 local trail = {}
 local trailT = 0
-local function toWorld(v)
+toWorld = function(v)
     local w = Vector(v.x, v.y, v.z) * DR.k
     w:rotate(DR.ang)
     return w + DR.pos
@@ -1982,22 +2079,7 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
         end
     end
 
-    if SP.active and not DR.hidden then
-        local t = (now - SP.t0) / SPARK_DURATION
-        if t < 1 then
-            local fade = 1 - t * t
-            for _, pts in ipairs(SP.arcs) do
-                local wp = {}
-                for i = 1, #pts do wp[i] = toWorld(pts[i]) end
-                for i = 2, #wp do
-                    local seg = wp[i] - wp[i - 1]
-                    local mid = (wp[i] + wp[i - 1]) * 0.5
-                    local boltCol = Color(SPARK_COLOR.r, SPARK_COLOR.g, SPARK_COLOR.b, 230 * fade)
-                    spriteLightning(wp[i - 1], wp[i], math.max(5, u * 0.12), boltCol, 3, i + now * 7)
-                end
-            end
-        end
-    end
+    if not DR.hidden then drawSparks(now) end
 
     -- Charge rods: branching, jagged light arcs point outward around the hull.
     local charging = (IS_OWNER and DR.charging) or (not IS_OWNER and REM.mode == 2 and REM.charging and now - REM.t < 1.5)
@@ -2045,7 +2127,7 @@ hook.add("think", "dr_think", function()
         if DR.charging and DR.mode ~= "ride" then DR.charging = false end
         if DR.charging and DR.chargeSparkIndex and DR.chargeSparkIndex <= 3
             and now - DR.chargeT >= DR.chargeSparkIndex * 0.8 then
-            sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)])
+            sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)], SPARK_VOLUME)
             DR.chargeSparkIndex = DR.chargeSparkIndex + 1
         end
         if DR.charging and not DR.pulseFired and now - DR.chargeT >= PULSE_CHARGE_TIME then
@@ -2154,19 +2236,7 @@ hook.add("think", "dr_think", function()
     local du = DR.unit * DR.k
     updShield(shD, dt, now, DR.pos, du * SHIELD_D_DIST, du * SHIELD_D_WIDTH)
 
-    -- sparks timing
-    if IS_OWNER and DR.ready and not SP.nextT then SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY) end
-    if IS_OWNER and SP.nextT and now >= SP.nextT then startBurst(now) end
-    if SP.active then
-        if now > SP.t0 + SPARK_DURATION then
-            SP.active = false
-        elseif now >= SP.reroll then
-            for i = 1, #SP.arcs do
-                if math.random() < 0.6 then SP.arcs[i] = newArc() end
-            end
-            SP.reroll = now + rnd(0.04, 0.09)
-        end
-    end
+    updateSparks(now)
 end)
 
 end -- CLIENT
