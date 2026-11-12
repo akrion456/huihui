@@ -37,15 +37,17 @@ KEY_SHIELD_P = 18   -- H
 KEY_SHIELD_D = 20   -- J
 KEY_CONTROL  = 21   -- K
 KEY_RIDE     = 22   -- L
+KEY_MENU     = 23   -- M
+KEY_PULSE    = 32   -- V
 
 -- sounds (played ONCE per press, on and off)
-SND_SHIELD_P = "ambient/levels/outland/cave_siren1_loop.wav"
-SND_SHIELD_D = "ambient/levels/outland/cave_siren2_loop.wav"
-SND_CONTROL  = "ambient/levels/outland/cave_siren_loop3.wav"
-SND_RIDE     = "ambient/levels/outland/cave_siren_loop4.wav"
+SND_SHIELD_P = "buttons/button17.wav"
+SND_SHIELD_D = "buttons/button18.wav"
+SND_CONTROL  = "buttons/button14.wav"
+SND_RIDE     = "buttons/button15.wav"
 SFX_VOLUME = 0.8
 SFX_LEVEL = 80
-SFX_MAX_TIME = 3                 -- stop the sound after this many seconds (nil = let it finish)
+SFX_MAX_TIME = nil               -- all configured cues are one-shots; do not restart/loop them
 
 -- body lock (K mode)
 LOCK_API = true                  -- use input.lockControls while frozen (set false if your mouse stops turning)
@@ -124,9 +126,9 @@ NET_RATE_RIDE = 0.01
 NET_RATE_CTRL = 0.5
 
 -- sparks
-SPARK_MIN_DELAY = 5
-SPARK_MAX_DELAY = 10
-SPARK_DURATION = 0.65
+SPARK_MIN_DELAY = 1.5
+SPARK_MAX_DELAY = 2.5
+SPARK_DURATION = 0.9
 SPARK_ARCS_MIN = 2
 SPARK_ARCS_MAX = 4
 SPARK_SEGMENTS = 7
@@ -141,7 +143,7 @@ PULSE_CHARGE_TIME = 3
 PULSE_RANGE = 10000
 PULSE_DAMAGE = 1200
 PULSE_SOUND = "ambient/energy/zap9.wav"
-PULSE_CHARGE_SOUND = "ambient/energy/force_field_loop1.wav"
+PULSE_CHARGE_SOUND = "ambient/energy/zap1.wav"
 SPARK_SOUNDS = {
     "ambient/energy/newspark01.wav", "ambient/energy/newspark02.wav", "ambient/energy/newspark03.wav",
     "ambient/energy/newspark04.wav", "ambient/energy/newspark05.wav", "ambient/energy/newspark06.wav",
@@ -292,6 +294,10 @@ if SERVER then
         if not ok or not valid(s) then say("seat spawn failed: " .. tostring(s)) return end
         seat = s
         setInvisible(s, true)
+        pcall(function()
+            local phys = s:getPhysicsObject()
+            if phys and phys:isValid() then phys:enableMotion(false) phys:sleep() end
+        end)
         rPos, rVel, rT, rYaw = p, Vector(), timer.curtime(), yaw
         lastMsg = timer.curtime()
         wantSit, seatedOnce, shownVis, tryN, nextTry = true, false, false, 0, 0
@@ -357,11 +363,13 @@ if SERVER then
         end
 
         if not wantSit then
-            -- Extrapolate only a short frame from the high-rate ride stream; this keeps the
-            -- server vehicle tightly registered under the client-rendered drone.
-            local dt = math.min(now - rT, 0.025)
+            -- Follow the latest streamed drone seat point with a short, damped correction.
+            -- The seat physics is frozen above so it cannot drift independently.
+            local dt = math.min(math.max(now - rT, 0), 0.05)
+            local alpha = 1 - math.exp(-55 * math.max(dt, 0.015))
             pcall(function()
-                seat:setPos(rPos + rVel * dt)
+                local current = seat:getPos()
+                seat:setPos(current + (rPos - current) * alpha)
                 seat:setAngles(Angle(0, rYaw + SEAT_YAW_OFF, 0))
             end)
         end
@@ -1610,6 +1618,7 @@ if IS_OWNER then
         end
         if key == KEY_PULSE and DR.mode == "ride" and DR.stage == "fly" and not DR.charging then
             DR.charging, DR.chargeT, DR.pulseFired = true, timer.curtime(), false
+            DR.chargeSparkPlayed = false
             sfx(PULSE_CHARGE_SOUND)
             DR.snT = 0
             return
@@ -1694,16 +1703,16 @@ if IS_OWNER then
         drawHudOutline(24, h - 116, 282, 92, 2)
         render.drawSimpleText(36, h - 108, "DRONE COMPANION // SYSTEM STATUS", 0, 0)
         render.setColor(dim)
-        render.drawSimpleText(36, h - 83, "DRONE", 0, 0)
-        render.drawSimpleText(36, h - 57, "SHIELD", 0, 0)
-        render.drawSimpleText(270, h - 83, math.floor(droneHP) .. " / " .. DRONE_MAX_HP, 2, 0)
-        render.drawSimpleText(270, h - 57, math.floor(shieldHP) .. " / " .. SHIELD_MAX_HP, 2, 0)
+        render.drawSimpleText(36, h - 88, "DRONE", 0, 0)
+        render.drawSimpleText(36, h - 52, "SHIELD", 0, 0)
+        render.drawSimpleText(270, h - 88, math.floor(droneHP) .. " / " .. DRONE_MAX_HP, 2, 0)
+        render.drawSimpleText(270, h - 52, math.floor(shieldHP) .. " / " .. SHIELD_MAX_HP, 2, 0)
         render.setColor(Color(8, 35, 45, 255))
-        render.drawRect(94, h - 82, 158, 8)
-        render.drawRect(94, h - 56, 158, 8)
+        render.drawRect(94, h - 69, 158, 7)
+        render.drawRect(94, h - 33, 158, 7)
         render.setColor(cyan)
-        render.drawRect(94, h - 82, 158 * clamp(droneHP / DRONE_MAX_HP, 0, 1), 8)
-        render.drawRect(94, h - 56, 158 * clamp(shieldHP / SHIELD_MAX_HP, 0, 1), 8)
+        render.drawRect(94, h - 69, 158 * clamp(droneHP / DRONE_MAX_HP, 0, 1), 7)
+        render.drawRect(94, h - 33, 158 * clamp(shieldHP / SHIELD_MAX_HP, 0, 1), 7)
 
         render.setFont(smallFont)
         render.setColor(cyan)
@@ -1786,17 +1795,24 @@ local function startBurst(now)
     for i = 1, math.random(SPARK_ARCS_MIN, SPARK_ARCS_MAX) do SP.arcs[i] = newArc() end
     SP.reroll = now + rnd(0.04, 0.09)
     SP.nextT = now + rnd(SPARK_MIN_DELAY, SPARK_MAX_DELAY)
-    if IS_OWNER then sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)]) end
 end
 
 local matBeam = material.create("UnlitGeneric")
 matBeam:setTexture("$basetexture", "effects/laser1")
 matBeam:setInt("$flags", 16 + 32 + 128 + 8192)
 local function beam(a, b, width, col)
-    pcall(function()
+    local ok = pcall(function()
         render.setMaterial(matBeam)
-        render.drawBeam(a, b, width, 0, 1, col)
+        render.setColor(col)
+        render.draw3DBeam(a, b, width, 0, 1)
     end)
+    -- Keep the bolt visible even if a server's Starfall fork lacks textured beams.
+    if not ok then
+        pcall(function()
+            render.setColor(col)
+            render.draw3DLine(a, b, false)
+        end)
+    end
 end
 
 local trail = {}
@@ -1874,8 +1890,8 @@ hook.add("think", "dr_think", function()
     if IS_OWNER then
         if DR.mode ~= "follow" and not ME:isAlive() then endModes(true) end
         if DR.charging and DR.mode ~= "ride" then DR.charging = false end
-        if DR.charging and now >= (DR.chargeSparkT or 0) then
-            DR.chargeSparkT = now + 0.9
+        if DR.charging and not DR.chargeSparkPlayed and now - DR.chargeT >= 1.4 then
+            DR.chargeSparkPlayed = true
             sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)])
         end
         if DR.charging and not DR.pulseFired and now - DR.chargeT >= PULSE_CHARGE_TIME then
