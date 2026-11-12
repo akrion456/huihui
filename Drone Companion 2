@@ -150,6 +150,23 @@ SPARK_SOUNDS = {
     "ambient/energy/newspark04.wav", "ambient/energy/newspark05.wav", "ambient/energy/newspark06.wav",
 }
 
+-- pulse cannon VFX / SFX
+PULSE_VFX = true
+PULSE_VFX_DETAIL = 1.0
+PULSE_BEAM_TIME = 0.8
+PULSE_SHAKE = true
+PULSE_SCREEN_FLASH = true
+PULSE_SPLASH_RADIUS = 300
+PULSE_SPLASH_DAMAGE = 500
+PULSE_CHARGE_STAGES = {
+    { 0.00, "weapons/physcannon/physcannon_charge.wav" },
+    { 0.35, "ambient/energy/weld1.wav" },
+    { 0.70, "weapons/physcannon/superphys_small_zap1.wav" },
+    { 0.92, "ambient/energy/weld2.wav" },
+}
+PULSE_FIRE_SOUNDS = { "npc/strider/fire.wav", "weapons/physcannon/energy_disintegrate4.wav", "ambient/energy/whiteflash.wav" }
+PULSE_IMPACT_SOUNDS = { "ambient/explosions/explode_4.wav", "weapons/mortar/mortar_explode3.wav", "ambient/levels/labs/electric_explosion1.wav" }
+
 ----------------------------------------------------------------
 -- SERVER: body freeze, invisible seat, shield defense, state relay
 ----------------------------------------------------------------
@@ -183,17 +200,22 @@ if SERVER then
         [PULSE_SOUND] = true, [PULSE_CHARGE_SOUND] = true,
     }
     for _, path in ipairs(SPARK_SOUNDS) do ALLOWED_SOUNDS[path] = true end
-    local function relaySound(path, pos, volume)
+    for _, path in ipairs(PULSE_FIRE_SOUNDS) do ALLOWED_SOUNDS[path] = true end
+    for _, path in ipairs(PULSE_IMPACT_SOUNDS) do ALLOWED_SOUNDS[path] = true end
+    for _, st in ipairs(PULSE_CHARGE_STAGES) do ALLOWED_SOUNDS[st[2]] = true end
+
+    local function relaySound(path, pos, volume, level)
         net.start("dr_sfx")
         net.writeString(path)
         net.writeVector(pos)
         net.writeFloat(volume or SFX_VOLUME)
+        net.writeUInt(math.floor(math.max(40, math.min(150, level or SFX_LEVEL))), 8)
         net.send()
     end
     net.receive("dr_sfx", function(_, ply)
         if ply ~= ME then return end
-        local path, pos, volume = net.readString(), net.readVector(), net.readFloat()
-        if ALLOWED_SOUNDS[path] then relaySound(path, pos, volume) end
+        local path, pos, volume, level = net.readString(), net.readVector(), net.readFloat(), net.readUInt(8)
+        if ALLOWED_SOUNDS[path] then relaySound(path, pos, volume, level) end
     end)
 
     net.receive("dr_spark", function(_, ply)
@@ -723,19 +745,37 @@ if SERVER then
         local filter = { ME }
         if valid(seat) then filter[2] = seat end
         local traced = pcall(function() tr = trace.line(start, finish, filter) end)
-        if traced and tr and tr.HitPos then finish = tr.HitPos end
+        local hit, entHit, normal = false, false, dir * -1
         if traced and tr then
+            if tr.HitPos then finish = tr.HitPos end
+            hit = (tr.Hit and not tr.HitSky) and true or false
+            if hit and tr.HitNormal then normal = tr.HitNormal end
             pcall(function()
                 if valid(tr.Entity) and tr.Entity ~= ME and tr.Entity ~= seat then
+                    entHit = true
                     tr.Entity:takeDamage(PULSE_DAMAGE, ME, ME)
                 end
             end)
         end
+        if hit and PULSE_SPLASH_DAMAGE > 0 and (finish - ME:getPos()):getLength() > PULSE_SPLASH_RADIUS + 80 then
+            pcall(function() game.blastDamage(finish + normal * 8, PULSE_SPLASH_RADIUS, PULSE_SPLASH_DAMAGE) end)
+        end
         net.start("dr_shot")
         net.writeVector(start)
         net.writeVector(finish)
+        net.writeVector(normal)
+        net.writeBool(hit)
+        net.writeBool(entHit)
         net.send()
-        relaySound(PULSE_SOUND, start, SFX_VOLUME)
+
+        relaySound(PULSE_SOUND, start, 1, 110)
+        for _, sound in ipairs(PULSE_FIRE_SOUNDS) do relaySound(sound, start, 1, 110) end
+        if hit then
+            local d = (finish - start):getLength()
+            timer.simple(math.min(0.6, d / 6000), function()
+                for _, sound in ipairs(PULSE_IMPACT_SOUNDS) do relaySound(sound, finish, 1, 130) end
+            end)
+        end
     end)
 
     hook.add("think", "dr_hp_regen", function()
@@ -831,22 +871,23 @@ sndHolo:setNoDraw(true)
 
 ---------------- sound (one shot) ----------------
 local sfxTokens = {}
-local function sfx(path, volume)
+local function sfx(path, volume, level)
     if not IS_OWNER then return end
     net.start("dr_sfx")
     net.writeString(path)
     net.writeVector(DR.pos)
     net.writeFloat(volume or SFX_VOLUME)
+    net.writeUInt(level or SFX_LEVEL, 8)
     net.send()
 end
 
 net.receive("dr_sfx", function()
-    local path, pos, volume = net.readString(), net.readVector(), net.readFloat()
+    local path, pos, volume, level = net.readString(), net.readVector(), net.readFloat(), net.readUInt(8)
     sfxTokens[path] = (sfxTokens[path] or 0) + 1
     local token = sfxTokens[path]
     pcall(function()
         sndHolo:setPos(pos)
-        sndHolo:emitSound(path, SFX_LEVEL, 100, volume)
+        sndHolo:emitSound(path, level, 100, volume)
         if SFX_MAX_TIME then
             timer.simple(SFX_MAX_TIME, function()
                 if sfxTokens[path] == token then pcall(function() sndHolo:stopSound(path) end) end
@@ -864,59 +905,283 @@ net.receive("dr_destroy", function()
     if who == ME then droneHP = 0 end
 end)
 
-local PULSE_BEAM = { start = nil, finish = nil, t = 0 }
-local function pulseEffect(pos, normal, effectName, magnitude, scale)
+local PULSE_BEAM = { start = nil, finish = nil, t = -100, normal = Vector(0, 0, 1), hit = false }
+
+local FX = {
+    rings = {}, lights = {}, queue = {}, arcs = {}, streaks = {},
+    flash = 0, charge = 0, arcT = 0, streakT = 0,
+    nextShake = 0, nextCharge = 0, nextDust = 0, nextVent = 0, smokeUntil = 0,
+    noLight = false, impactT = -100, impactPos = nil,
+}
+local PM = {
+    smoke = { "particle/smokestack", "particle/particle_smokegrenade" },
+    glow = "sprites/light_glow02_add",
+    flare = "effects/blueflare1",
+    spark = "effects/spark",
+    fire = "effects/fire_cloud1",
+}
+
+local function randUnit()
+    local d = Vector(math.random() * 2 - 1, math.random() * 2 - 1, math.random() * 2 - 1)
+    if d:getLengthSqr() < 0.01 then return Vector(0, 0, 1) end
+    return d:getNormalized()
+end
+local function detail(n) return math.max(0, math.floor(n * PULSE_VFX_DETAIL + 0.5)) end
+local function fxBudget()
+    local avg, maxq = 0, 1
+    pcall(function() avg, maxq = quotaAverage(), quotaMax() end)
+    return PULSE_VFX and avg < maxq * 0.75
+end
+local function basisOf(n)
+    local ref = math.abs(n.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0)
+    local a = n:cross(ref):getNormalized()
+    local b = n:cross(a):getNormalized()
+    return a, b
+end
+local function muzzlePos() return DR.pos + DR.ang:getForward() * (DR.unit * DR.k * 0.52) end
+
+local function chargeAmount(now)
+    if IS_OWNER then
+        return DR.charging and clamp((now - DR.chargeT) / PULSE_CHARGE_TIME, 0, 1) or 0
+    end
+    if REM.mode == 2 and REM.charging and now - REM.t < 1.5 then
+        return clamp(REM.charge + (now - REM.t) / PULSE_CHARGE_TIME, 0, 1)
+    end
+    return 0
+end
+
+local function newEmitter(pos)
+    if not PULSE_VFX then return nil end
+    local ok, e = pcall(function()
+        if particle.particleEmittersLeft() <= 0 then return nil end
+        return particle.create(pos, false)
+    end)
+    return ok and e or nil
+end
+local function endEmitter(em) if em then pcall(function() em:finish() end) end end
+
+-- one particle: emitter, material, position, sizes, alphas, lifetime, velocity, color, gravity, drag, lengths, roll, collision
+local function P(em, mat, pos, s0, s1, a0, a1, life, vel, col, grav, drag, len0, len1, roll, collide)
+    if not em then return end
+    pcall(function()
+        local p = em:add(mat, pos, s0, s1, len0 or 0, len1 or 0, a0, a1, life)
+        if not p then return end
+        if vel then p:setVelocity(vel) end
+        if col then
+            if not pcall(p.setColor, p, col) then p:setColor(col.r, col.g, col.b) end
+        end
+        if grav then p:setGravity(grav) end
+        if drag then p:setAirResistance(drag) end
+        if roll then p:setRoll(roll) p:setRollDelta((math.random() - 0.5) * 2) end
+        if collide then p:setCollide(true) p:setBounce(0.4) end
+    end)
+end
+
+local function playFx(name, pos, normal, mag, scale, radius)
     pcall(function()
         local fx = effect.create()
         fx:setOrigin(pos)
         fx:setNormal(normal)
-        fx:setMagnitude(magnitude)
-        fx:setScale(scale)
-        fx:play(effectName)
+        fx:setMagnitude(mag or 1)
+        fx:setScale(scale or 1)
+        if radius then fx:setRadius(radius) end
+        fx:play(name)
     end)
 end
-local function pulseHolograms(startPos, endPos)
-    local delta = endPos - startPos
-    local length = delta:getLength()
-    if length < 1 then return end
-    local dir, ang = delta:getNormalized(), delta:getAngle()
-    local segmentCount = math.max(2, math.min(16, math.ceil(length / 700)))
-    local width = math.max(42, SIZE * 0.9)
-    local spawned = {}
-    for i = 1, segmentCount do
-        local a = (i - 1) / segmentCount
-        local b = i / segmentCount
-        local segLen = length / segmentCount
-        local center = startPos + delta * ((a + b) * 0.5)
-        local ok, holo = pcall(hologram.create, center, ang, CUBE_MDL, Vector(1, 1, 1))
-        if ok and holo then
-            pcall(function()
-                holo:setPos(center)
-                holo:setAngles(ang)
-                holo:setScale(Vector(segLen / 25, width / 25, width / 25))
-                holo:setColor(Color(30, 185, 255, 195))
-                holo:setRenderMode(4)
-                holo:setMaterial("sprites/physcannon_bluecore2b")
-                holo:setNoDraw(false)
-            end)
-            spawned[#spawned + 1] = holo
+local function pulseEffect(pos, normal, effectName, magnitude, scale) playFx(effectName, pos, normal, magnitude, scale) end
+
+local function addLight(pos, size, bright, col, life)
+    if #FX.lights > 30 then table.remove(FX.lights, 1) end
+    FX.lights[#FX.lights + 1] = { pos = pos, size = size, bright = bright, col = col, t0 = timer.curtime(), life = life }
+end
+local function addRing(pos, normal, r0, r1, life, col, delay)
+    if #FX.rings > 40 then table.remove(FX.rings, 1) end
+    FX.rings[#FX.rings + 1] = { pos = pos, n = normal, r0 = r0, r1 = r1, life = life, col = col, t0 = timer.curtime() + (delay or 0) }
+end
+local function shake(pos, amp, dur, radius)
+    if not PULSE_SHAKE then return end
+    pcall(function() util.screenShake(pos, amp, 40, dur, radius) end)
+end
+
+---------------- fire bursts (run from a queue, a few per frame) ----------------
+local function muzzleBurst(start, dir)
+    local u = DR.unit * DR.k
+    local em = newEmitter(start)
+    if not em then return end
+    for i = 1, detail(26) do
+        local d = (dir + randUnit() * 0.35):getNormalized()
+        P(em, PM.spark, start + dir * 4, 3, 1, 255, 0, 0.35 + math.random() * 0.5, d * (600 + math.random() * 2200),
+            Color(140, 230, 255), Vector(0, 0, -200), 1, u * 0.6, u * 0.1)
+    end
+    for i = 1, detail(8) do
+        local d = (dir * 0.4 + randUnit()):getNormalized()
+        P(em, PM.smoke[1], start, u * 0.2, u * (0.8 + math.random()), 170, 0, 1.5 + math.random() * 1.5,
+            d * (80 + math.random() * 220), Color(120, 150, 175), Vector(0, 0, 25), 2.5, 0, 0, math.random() * 360)
+    end
+    P(em, PM.flare, start + dir * 8, u * 0.5, u * 3.5, 255, 0, 0.18, Vector(), Color(200, 240, 255))
+    endEmitter(em)
+end
+
+local function beamLineFx(a, b)
+    local delta = b - a
+    local len = delta:getLength()
+    if len < 10 then return end
+    local u = DR.unit * DR.k
+    local em = newEmitter(a)
+    if not em then return end
+    for i = 1, detail(math.min(70, len / 140)) do
+        local p = a + delta * math.random()
+        local off = randUnit()
+        P(em, PM.flare, p + off * u * 0.3, u * 0.9, 0, 255, 0, 0.25 + math.random() * 0.35, off * 40, Color(80, 200, 255))
+        if i % 2 == 0 then
+            P(em, PM.spark, p, 2, 1, 255, 0, 0.6 + math.random() * 0.9, off * (120 + math.random() * 260),
+                Color(170, 240, 255), Vector(0, 0, -120), 1.5, 14, 4)
+        end
+        if i % 3 == 0 then
+            P(em, PM.smoke[2], p, u * 0.5, u * (1.5 + math.random()), 90, 0, 1.6 + math.random() * 1.6,
+                off * (20 + math.random() * 50) + Vector(0, 0, 15), Color(150, 200, 230), nil, 2, 0, 0, math.random() * 360)
         end
     end
-    timer.simple(0.48, function()
-        for _, holo in ipairs(spawned) do
-            pcall(function() holo:setNoDraw(true) holo:remove() end)
-        end
-    end)
+    endEmitter(em)
 end
+
+local function impactFx(pos, n, entHit)
+    local a, b = basisOf(n)
+    local em = newEmitter(pos)
+    if em then
+        for i = 1, detail(14) do
+            local d = (n * 0.6 + randUnit()):getNormalized()
+            if d:dot(n) < 0 then d = d - n * (2 * d:dot(n)) end
+            P(em, PM.fire, pos + n * 8, 30, 220 + math.random() * 160, 255, 0, 0.5 + math.random() * 0.5,
+                d * (80 + math.random() * 420), Color(90, 190, 255), nil, 3, 0, 0, math.random() * 360)
+        end
+        P(em, PM.flare, pos + n * 10, 200, 1100, 255, 0, 0.35, Vector(), Color(180, 235, 255))
+        P(em, PM.glow, pos + n * 10, 300, 1800, 255, 0, 0.5, Vector(), Color(40, 140, 255))
+        for i = 1, detail(45) do
+            local d = (n * 0.8 + randUnit() * 1.1):getNormalized()
+            if d:dot(n) < 0.05 then d = d - n * (2 * d:dot(n)) end
+            P(em, PM.spark, pos + n * 4, 3, 1, 255, 0, 0.9 + math.random() * 1.3, d * (300 + math.random() * 1500),
+                Color(190, 240, 255), Vector(0, 0, -700), 0.3, 40, 8, nil, true)
+        end
+        for i = 1, detail(16) do
+            local d = (n * 1.2 + randUnit() * 0.5):getNormalized()
+            P(em, PM.smoke[(i % 2) + 1], pos + n * 10 + randUnit() * 20, 40, 260 + math.random() * 200, 210, 0,
+                3 + math.random() * 3, d * (60 + math.random() * 180), Color(55, 60, 70), Vector(0, 0, 18), 1.2, 0, 0, math.random() * 360)
+        end
+        for i = 1, detail(28) do
+            local ang = math.random() * math.pi * 2
+            local t = a * math.cos(ang) + b * math.sin(ang)
+            P(em, PM.smoke[1], pos + t * 20 + n * 6, 25, 150 + math.random() * 100, 160, 0, 1.4 + math.random() * 1.2,
+                t * (350 + math.random() * 650) + n * 30, Color(150, 140, 125), Vector(0, 0, 10), 2.6, 0, 0, math.random() * 360)
+        end
+        endEmitter(em)
+    end
+    addRing(pos + n * 3, n, 20, 520, 0.55, Color(80, 200, 255, 255))
+    addRing(pos + n * 3, n, 10, 900, 0.8, Color(255, 255, 255, 200), 0.05)
+    addRing(pos + n * 3, n, 5, 1400, 1.1, Color(30, 120, 255, 150), 0.12)
+    addLight(pos + n * 30, 900, 6, Color(80, 180, 255), 1.1)
+    playFx("cball_explode", pos, n, 4, 3)
+    playFx("Explosion", pos + n * 4, n, 3, 3)
+    playFx("HelicopterMegaBomb", pos + n * 4, n, 3, 3)
+    playFx("ElectricSpark", pos, n, 6, 4)
+    playFx("ThumperDust", pos, n, 6, 6)
+    playFx("StunstickImpact", pos, n, 2, 2)
+    shake(pos, 25, 1.6, 3500)
+end
+
 net.receive("dr_shot", function()
-    PULSE_BEAM.start, PULSE_BEAM.finish = net.readVector(), net.readVector()
-    PULSE_BEAM.t = timer.curtime()
-    pulseHolograms(PULSE_BEAM.start, PULSE_BEAM.finish)
-    local dir = (PULSE_BEAM.finish - PULSE_BEAM.start):getNormalized()
-    pulseEffect(PULSE_BEAM.start, dir, "ManhackSparks", 3, 1.4)
-    pulseEffect(PULSE_BEAM.finish, dir * -1, "cball_explode", 4, 2.2)
+    local a, b, n = net.readVector(), net.readVector(), net.readVector()
+    local hit, entHit = net.readBool(), net.readBool()
+    local now = timer.curtime()
+    PULSE_BEAM.start, PULSE_BEAM.finish, PULSE_BEAM.normal, PULSE_BEAM.hit, PULSE_BEAM.t = a, b, n, hit, now
+    local dir = (b - a):getNormalized()
+    FX.flash = 1
+    FX.smokeUntil = now + 3
+    pulseEffect(a, dir, "ManhackSparks", 3, 1.4)
+    if hit then
+        FX.impactT, FX.impactPos = now, b
+        if not PULSE_VFX then pulseEffect(b, n, "cball_explode", 4, 2.2) end
+    end
+    if not PULSE_VFX then return end
+    playFx("StunstickImpact", a, dir, 2, 2)
+    addLight(a + dir * 20, 700, 5, Color(100, 200, 255), 0.45)
+    addRing(a + dir * 10, dir, 10, 260, 0.4, Color(150, 230, 255, 255))
+    addRing(a + dir * 30, dir, 10, 420, 0.55, Color(60, 160, 255, 200), 0.05)
+    shake(a, 12, 0.8, 1500)
+    FX.queue[#FX.queue + 1] = function() muzzleBurst(a, dir) end
+    FX.queue[#FX.queue + 1] = function() beamLineFx(a, b) end
+    if hit then FX.queue[#FX.queue + 1] = function() impactFx(b, n, entHit) end end
 end)
 
+---------------- per-frame logic (call from the main think) ----------------
+local function pulseFxUpdate(now, dt)
+    FX.flash = math.max(0, FX.flash - dt * 2.8)
+
+    local ran = 0
+    while #FX.queue > 0 and ran < 3 and fxBudget() do
+        pcall(table.remove(FX.queue, 1))
+        ran = ran + 1
+    end
+    if #FX.queue > 12 then FX.queue = {} end
+
+    local c = chargeAmount(now)
+    FX.charge = c
+    if not PULSE_VFX or not DR.ready then return end
+    local u = DR.unit * DR.k
+
+    if c > 0 then
+        local mz = muzzlePos()
+        if now >= FX.nextShake then
+            FX.nextShake = now + 0.12
+            shake(mz, 0.5 + 5 * c * c, 0.2, 700)
+        end
+        if now >= FX.nextCharge and fxBudget() then
+            FX.nextCharge = now + 0.04
+            local em = newEmitter(mz)
+            if em then
+                for i = 1, detail(2 + 6 * c) do
+                    local p0 = mz + randUnit() * (u * (1.2 + math.random() * 2.2))
+                    local life = 0.35 + math.random() * 0.25
+                    local vel = (mz - p0) * (1 / life)
+                    P(em, PM.spark, p0, 2, 1, 255, 255, life, vel, Color(80, 200, 255), nil, nil, u * 0.35, u * 0.08)
+                    if i % 3 == 0 then P(em, PM.flare, p0, u * 0.35, u * 0.05, 200, 255, life, vel, Color(120, 220, 255)) end
+                end
+                endEmitter(em)
+            end
+        end
+        if now >= FX.nextDust then
+            FX.nextDust = now + 0.07
+            local ok, tr = pcall(trace.line, DR.pos, DR.pos - Vector(0, 0, 500), ME)
+            if ok and tr and tr.Hit and not tr.StartSolid and fxBudget() then
+                local em = newEmitter(tr.HitPos)
+                if em then
+                    for i = 1, detail(2 + 4 * c) do
+                        local ang = math.random() * math.pi * 2
+                        local d = Vector(math.cos(ang), math.sin(ang), 0)
+                        P(em, PM.smoke[1], tr.HitPos + d * (10 + math.random() * 30) + Vector(0, 0, 3), 14, 60, 90, 0, 1.2,
+                            d * (150 + 300 * c) + Vector(0, 0, 20), Color(150, 140, 125), Vector(0, 0, 15), 2, 0, 0, math.random() * 360)
+                    end
+                    endEmitter(em)
+                end
+            end
+        end
+    end
+
+    if now < FX.smokeUntil and now >= FX.nextVent and fxBudget() then
+        FX.nextVent = now + 0.06
+        local fade = (FX.smokeUntil - now) / 3
+        local mz, fwd = muzzlePos(), DR.ang:getForward()
+        local em = newEmitter(mz)
+        if em then
+            P(em, PM.smoke[2], mz, u * 0.15, u * 0.7, 110 * fade, 0, 1.4, fwd * 40 + randUnit() * 25 + Vector(0, 0, 45),
+                Color(120, 135, 150), Vector(0, 0, 20), 2, 0, 0, math.random() * 360)
+            if math.random() < 0.5 then
+                P(em, PM.spark, mz, 2, 1, 255, 0, 0.5, fwd * 60 + randUnit() * 120, Color(120, 220, 255), Vector(0, 0, -250), 1, 10, 3, nil, true)
+            end
+            endEmitter(em)
+        end
+    end
+end
 ---------------- net (owner side) ----------------
 -- seat cmd: 2 create, 3 update, 4 release, 5 release + teleport
 local function sendSeat(cmd, p, v, yaw)
@@ -1758,6 +2023,24 @@ if IS_OWNER then
     hook.add("drawhud", "dr_hud", function()
         local w, h = render.getResolution()
         local cyan, dim, dark = Color(40, 230, 255, 235), Color(40, 150, 180, 220), Color(4, 15, 24, 210)
+        if PULSE_SCREEN_FLASH and IS_OWNER then
+            local c = FX.charge or 0
+            if c > 0 then
+                local a = math.floor(110 * c * c)
+                for i = 1, 4 do
+                    local th = i * (10 + 30 * c)
+                    render.setColor(Color(40, 170, 255, math.floor(a / i)))
+                    render.drawRect(0, 0, w, th)
+                    render.drawRect(0, h - th, w, th)
+                    render.drawRect(0, th, th, h - th * 2)
+                    render.drawRect(w - th, th, th, h - th * 2)
+                end
+            end
+            if FX.flash > 0 then
+                render.setColor(Color(200, 240, 255, math.floor(200 * FX.flash * FX.flash)))
+                render.drawRect(0, 0, w, h)
+            end
+        end
         render.setFont(smallFont)
         render.setColor(dark)
         render.drawRect(24, h - 116, 282, 92)
@@ -2020,18 +2303,199 @@ local pulseMats = {
     blackBall = makePulseMaterial("sprites/strider_blackball"),
     striderBeam = makePulseMaterial("sprites/strider_bluebeam"),
 }
-local function pulseBeamPass(a, b, width, mat, color)
-    pcall(function()
-        render.setMaterial(mat)
-        render.setColor(color)
-        render.draw3DBeam(a, b, width, 0, 1)
-    end)
-end
 local function pulseSprite(pos, size, mat, color)
     pcall(function()
         render.setMaterial(mat)
         render.draw3DSprite(pos, size, size, color)
     end)
+end
+
+pulseMats.ring = makePulseMaterial("effects/select_ring")
+pulseMats.glow = makePulseMaterial("sprites/light_glow02_add")
+pulseMats.flare = makePulseMaterial("effects/blueflare1")
+pulseMats.laser = makePulseMaterial("effects/laser1")
+
+local function drawRing(ctr, a, b, r, spin, col)
+    local ca, sa = math.cos(spin) * r, math.sin(spin) * r
+    local x = a * ca + b * sa
+    local y = b * ca - a * sa
+    pcall(function()
+        render.setMaterial(pulseMats.ring)
+        render.setColor(col)
+        render.draw3DQuad(ctr - x - y, ctr - x + y, ctr + x + y, ctr + x - y)
+    end)
+end
+
+local function lightAt(pos, size, bright, col)
+    if FX.noLight then return end
+    local ok = pcall(function()
+        local l = light.create(pos, size, bright, col)
+        l:draw()
+    end)
+    if not ok then FX.noLight = true end
+end
+
+local function scrollBeam(a, b, width, mat, col, speed, tile)
+    pcall(function()
+        render.setMaterial(mat)
+        render.setColor(col)
+        local t = timer.curtime() * speed
+        render.draw3DBeam(a, b, width, -t, (b - a):getLength() / tile - t)
+    end)
+end
+
+local function drawPulseFX(now)
+    local u = DR.unit * DR.k
+
+    local c = FX.charge
+    if c > 0 and DR.ready then
+        local mz = muzzlePos()
+        local fwd, rt, up = DR.ang:getForward(), DR.ang:getRight(), DR.ang:getUp()
+        local pulse = 0.85 + 0.15 * math.sin(now * 45)
+        local orb = u * (0.12 + 0.95 * c * c) * pulse
+        pulseSprite(DR.pos, u * (1.0 + 2.4 * c), pulseMats.glow, Color(30, 130, 255, 60 + 120 * c))
+        pulseSprite(mz, orb * 5, pulseMats.glow, Color(40, 150, 255, 120 + 100 * c))
+        pulseSprite(mz, orb * 2.6, pulseMats.flare, Color(130, 225, 255, 255))
+        pulseSprite(mz, orb * 1.1, pulseMats.spark, Color(255, 255, 255, 255))
+
+        local rr = u * (1.3 - 0.8 * c)
+        local ra = 80 + 170 * c
+        drawRing(mz + fwd * u * 0.1, rt, up, rr, now * 5, Color(80, 200, 255, ra))
+        drawRing(mz, fwd, up, rr * 1.1, -now * 7, Color(120, 220, 255, ra))
+        drawRing(mz, fwd, rt, rr * 0.9, now * 9, Color(60, 170, 255, ra))
+
+        if now >= FX.streakT then
+            FX.streakT = now + 0.03
+            FX.streaks = {}
+            for i = 1, detail(4 + 12 * c) do FX.streaks[i] = { randUnit(), 1 + math.random() * 2.2 } end
+        end
+        pcall(function()
+            render.setMaterial(pulseMats.tpBeam)
+            render.setColor(Color(120, 225, 255, 200))
+            for _, streak in ipairs(FX.streaks) do
+                render.draw3DBeam(mz + streak[1] * (streak[2] * u), mz + streak[1] * (streak[2] * u * 0.55), u * 0.05, 0, 1)
+            end
+        end)
+        lightAt(mz, 150 + 500 * c, 1 + 4 * c, Color(60, 160, 255))
+    end
+
+    local B = PULSE_BEAM
+    local age = now - B.t
+    if B.start and age >= 0 and age < PULSE_BEAM_TIME then
+        local A, Bp = B.start, B.finish
+        local t = age / PULSE_BEAM_TIME
+        local fade = 1 - t
+        local snap = 1 + 1.2 * math.max(0, 1 - age * 9)
+        local flicker = 0.85 + 0.15 * math.sin(now * 90)
+        local width = math.max(58, u * 0.58) * flicker * snap * (fade ^ 0.6)
+        local dirV = Bp - A
+        local len = dirV:getLength()
+        if len > 1 then
+            local dir = dirV * (1 / len)
+            local ra, rb = basisOf(dir)
+            scrollBeam(A, Bp, width * 4.6, pulseMats.striderBeam, Color(5, 45, 255, 70 * fade), 1.5, 512)
+            scrollBeam(A, Bp, width * 3.0, pulseMats.blueCore, Color(15, 115, 255, 150 * fade), -2.0, 512)
+            scrollBeam(A, Bp, width * 1.7, pulseMats.tpBeam, Color(0, 210, 255, 230 * fade), 6, 400)
+            scrollBeam(A, Bp, width * 0.9, pulseMats.blueShaft, Color(150, 245, 255, 250 * fade), 10, 300)
+            scrollBeam(A, Bp, width * 0.36, pulseMats.magic, Color(255, 255, 255, 255 * fade), 14, 200)
+
+            local segs = math.min(72, math.max(14, math.floor(len / 110)))
+            local spin = now * 14
+            for h = 0, 1 do
+                pcall(function()
+                    render.setMaterial(pulseMats.laser)
+                    render.setColor(h == 0 and Color(60, 210, 255, 230 * fade) or Color(210, 245, 255, 230 * fade))
+                    local prev
+                    for i = 0, segs do
+                        local dist = (i / segs) * len
+                        local phi = dist * 0.012 - spin + h * math.pi
+                        local r = width * (0.7 + 1.8 * t) * math.min(1, dist / 250)
+                        local pos = A + dir * dist + (ra * math.cos(phi) + rb * math.sin(phi)) * r
+                        if prev then render.draw3DBeam(prev, pos, width * 0.22, 0, 1) end
+                        prev = pos
+                    end
+                end)
+            end
+
+            if now - FX.arcT > 0.05 then
+                FX.arcT = now
+                FX.arcs = {}
+                for i = 1, detail(9) do
+                    local f = (i % 3 == 0 and B.hit) and (1 - math.random() * math.min(0.1, 300 / len)) or math.random()
+                    local cur = A + dir * (len * f)
+                    local d1 = ra * (math.random() * 2 - 1) + rb * (math.random() * 2 - 1)
+                    d1 = d1:getLength() > 0.01 and d1:getNormalized() or ra
+                    local length = width * (1.5 + math.random() * 3)
+                    local pts = { cur }
+                    for j = 1, 5 do
+                        cur = cur + d1 * (length / 5) + randUnit() * (length * 0.18) + dir * ((math.random() * 2 - 1) * length * 0.1)
+                        pts[#pts + 1] = cur
+                    end
+                    FX.arcs[i] = pts
+                end
+            end
+            if t < 0.8 then
+                pcall(function()
+                    for _, pts in ipairs(FX.arcs) do
+                        render.setMaterial(pulseMats.laser)
+                        render.setColor(Color(120, 220, 255, 220 * fade))
+                        for j = 1, #pts - 1 do render.draw3DBeam(pts[j], pts[j + 1], width * 0.12, 0, 1) end
+                        render.setColor(Color(255, 255, 255, 255 * fade))
+                        for j = 1, #pts - 1 do render.draw3DBeam(pts[j], pts[j + 1], width * 0.04, 0, 1) end
+                    end
+                end)
+            end
+
+            local nR = math.min(14, math.floor(len / 350))
+            for i = 1, nR do
+                local dist = (i / nR) * len
+                local ringAge = age - dist / 30000
+                if ringAge > 0 and ringAge < 0.4 then
+                    local k = ringAge / 0.4
+                    drawRing(A + dir * dist, ra, rb, width * (1.5 + 4 * k), 0, Color(60, 190, 255, 200 * (1 - k)))
+                end
+            end
+        end
+
+        local mid = (A + Bp) * 0.5
+        pulseSprite(A, width * 3.0 + u * 2 * math.max(0, 1 - age * 6), pulseMats.glow, Color(100, 200, 255, 255 * fade))
+        pulseSprite(A, width * 3.0, pulseMats.spark, Color(100, 240, 255, 255 * fade))
+        pulseSprite(mid, width * 1.7, pulseMats.magic, Color(40, 180, 255, 180 * fade))
+        pulseSprite(Bp, width * 4.0, pulseMats.blackBall, Color(40, 150, 255, 230 * fade))
+        pulseSprite(Bp, width * 2.1, pulseMats.spark, Color(230, 250, 255, 255 * fade))
+    end
+
+    if FX.impactPos then
+        local ia = now - FX.impactT
+        if ia >= 0 and ia < 0.6 then
+            local k = ia / 0.6
+            local alpha = 255 * (1 - k) * (1 - k)
+            pulseSprite(FX.impactPos, 500 + 2500 * k, pulseMats.glow, Color(60, 170, 255, alpha))
+            pulseSprite(FX.impactPos, 300 + 900 * k, pulseMats.flare, Color(220, 245, 255, alpha))
+        end
+    end
+
+    for i = #FX.rings, 1, -1 do
+        local R = FX.rings[i]
+        local ringAge = now - R.t0
+        if ringAge >= R.life then
+            table.remove(FX.rings, i)
+        elseif ringAge >= 0 then
+            local k = ringAge / R.life
+            local e = 1 - (1 - k) ^ 3
+            local a, b = basisOf(R.n)
+            drawRing(R.pos, a, b, R.r0 + (R.r1 - R.r0) * e, 0, Color(R.col.r, R.col.g, R.col.b, R.col.a * (1 - k)))
+        end
+    end
+    for i = #FX.lights, 1, -1 do
+        local L = FX.lights[i]
+        local k = (now - L.t0) / L.life
+        if k >= 1 then
+            table.remove(FX.lights, i)
+        elseif k >= 0 then
+            lightAt(L.pos, L.size * (1 - k), L.bright * (1 - k), L.col)
+        end
+    end
 end
 
 local trail = {}
@@ -2067,22 +2531,7 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
 
     drawChargeSparks(now)
 
-    -- Strong full-length pulse beam: blue glow shell, cyan body, white-hot core.
-    if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.42 then
-        local fade = 1 - (now - PULSE_BEAM.t) / 0.42
-        local flicker = 0.82 + 0.18 * math.sin(now * 83)
-        local width = math.max(58, DR.unit * DR.k * 0.58) * flicker
-        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 4.2, pulseMats.striderBeam, Color(5, 45, 255, 78 * fade))
-        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 2.8, pulseMats.blueCore, Color(15, 115, 255, 145 * fade))
-        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 1.65, pulseMats.tpBeam, Color(0, 210, 255, 225 * fade))
-        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 0.85, pulseMats.blueShaft, Color(150, 245, 255, 250 * fade))
-        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 0.34, pulseMats.magic, Color(245, 255, 255, 255 * fade))
-        local midpoint = (PULSE_BEAM.start + PULSE_BEAM.finish) * 0.5
-        pulseSprite(PULSE_BEAM.start, width * 3.0, pulseMats.spark, Color(100, 240, 255, 255 * fade))
-        pulseSprite(midpoint, width * 1.7, pulseMats.magic, Color(40, 180, 255, 180 * fade))
-        pulseSprite(PULSE_BEAM.finish, width * 4.0, pulseMats.blackBall, Color(40, 150, 255, 230 * fade))
-        pulseSprite(PULSE_BEAM.finish, width * 2.1, pulseMats.spark, Color(230, 250, 255, 255 * fade))
-    end
+    drawPulseFX(now)
 end)
 
 ---------------- main loop ----------------
@@ -2100,6 +2549,15 @@ hook.add("think", "dr_think", function()
             and now - DR.chargeT >= DR.chargeSparkIndex * 0.8 then
             sfx(SPARK_SOUNDS[math.random(#SPARK_SOUNDS)], SPARK_VOLUME)
             DR.chargeSparkIndex = DR.chargeSparkIndex + 1
+        end
+        if DR.charging then
+            local st = PULSE_CHARGE_STAGES[DR.stageIdx or 1]
+            if st and (now - DR.chargeT) / PULSE_CHARGE_TIME >= st[1] then
+                sfx(st[2], 0.8, 85)
+                DR.stageIdx = (DR.stageIdx or 1) + 1
+            end
+        else
+            DR.stageIdx = 1
         end
         if DR.charging and not DR.pulseFired and now - DR.chargeT >= PULSE_CHARGE_TIME then
             local eye = DR.viewAng
@@ -2207,6 +2665,7 @@ hook.add("think", "dr_think", function()
     local du = DR.unit * DR.k
     updShield(shD, dt, now, DR.pos, du * SHIELD_D_DIST, du * SHIELD_D_WIDTH)
 
+    pulseFxUpdate(now, dt)
     updateSparks(now)
     updateChargeSparks(now)
 end)
