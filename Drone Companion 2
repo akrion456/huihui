@@ -873,9 +873,43 @@ local function pulseEffect(pos, normal, effectName, magnitude, scale)
         fx:play(effectName)
     end)
 end
+local function pulseHolograms(startPos, endPos)
+    local delta = endPos - startPos
+    local length = delta:getLength()
+    if length < 1 then return end
+    local dir, ang = delta:getNormalized(), delta:getAngle()
+    local segmentCount = math.max(2, math.min(16, math.ceil(length / 700)))
+    local width = math.max(42, SIZE * 0.9)
+    local spawned = {}
+    for i = 1, segmentCount do
+        local a = (i - 1) / segmentCount
+        local b = i / segmentCount
+        local segLen = length / segmentCount
+        local center = startPos + delta * ((a + b) * 0.5)
+        local ok, holo = pcall(hologram.create, center, ang, CUBE_MDL, Vector(1, 1, 1))
+        if ok and holo then
+            pcall(function()
+                holo:setPos(center)
+                holo:setAngles(ang)
+                holo:setScale(Vector(segLen / 25, width / 25, width / 25))
+                holo:setColor(Color(30, 185, 255, 195))
+                holo:setRenderMode(4)
+                holo:setMaterial("sprites/physcannon_bluecore2b")
+                holo:setNoDraw(false)
+            end)
+            spawned[#spawned + 1] = holo
+        end
+    end
+    timer.simple(0.48, function()
+        for _, holo in ipairs(spawned) do
+            pcall(function() holo:setNoDraw(true) holo:remove() end)
+        end
+    end)
+end
 net.receive("dr_shot", function()
     PULSE_BEAM.start, PULSE_BEAM.finish = net.readVector(), net.readVector()
     PULSE_BEAM.t = timer.curtime()
+    pulseHolograms(PULSE_BEAM.start, PULSE_BEAM.finish)
     local dir = (PULSE_BEAM.finish - PULSE_BEAM.start):getNormalized()
     pulseEffect(PULSE_BEAM.start, dir, "ManhackSparks", 3, 1.4)
     pulseEffect(PULSE_BEAM.finish, dir * -1, "cball_explode", 4, 2.2)
@@ -1837,6 +1871,9 @@ matBeam:setInt("$flags", 16 + 32 + 128 + 8192)
 local matLightningSprite = material.create("UnlitGeneric")
 matLightningSprite:setTexture("$basetexture", "sprites/lgtning")
 matLightningSprite:setInt("$flags", 16 + 32 + 128 + 8192)
+local matLightningNoZ = material.create("UnlitGeneric")
+matLightningNoZ:setTexture("$basetexture", "sprites/lgtning_noz")
+matLightningNoZ:setInt("$flags", 16 + 32 + 128 + 8192)
 local function spriteLightning(a, b, width, col, pieces, phase)
     local delta = b - a
     local length = delta:getLength()
@@ -1865,6 +1902,7 @@ local function spriteLightning(a, b, width, col, pieces, phase)
         pcall(function()
             render.setMaterial(matLightningSprite)
             render.draw3DSprite(mid, math.max(3, width), math.max(6, segLen * 1.8), col)
+            render.setMaterial(matLightningNoZ)
             render.draw3DSprite(point, math.max(2, width * 0.42), math.max(4, width * 1.1), core)
         end)
         prev = point
@@ -1884,6 +1922,35 @@ local function beam(a, b, width, col)
             render.draw3DLine(a, b, false)
         end)
     end
+end
+
+local function makePulseMaterial(texture)
+    local mat = material.create("UnlitGeneric")
+    mat:setTexture("$basetexture", texture)
+    mat:setInt("$flags", 16 + 32 + 128 + 8192)
+    return mat
+end
+local pulseMats = {
+    blueCore = makePulseMaterial("sprites/physcannon_bluecore2b"),
+    tpBeam = makePulseMaterial("sprites/tp_beam001"),
+    spark = makePulseMaterial("sprites/xspark1"),
+    blueShaft = makePulseMaterial("sprites/blueshaft1"),
+    magic = makePulseMaterial("sprites/magic"),
+    blackBall = makePulseMaterial("sprites/strider_blackball"),
+    striderBeam = makePulseMaterial("sprites/strider_bluebeam"),
+}
+local function pulseBeamPass(a, b, width, mat, color)
+    pcall(function()
+        render.setMaterial(mat)
+        render.setColor(color)
+        render.draw3DBeam(a, b, width, 0, 1)
+    end)
+end
+local function pulseSprite(pos, size, mat, color)
+    pcall(function()
+        render.setMaterial(mat)
+        render.draw3DSprite(pos, size, size, color)
+    end)
 end
 
 local trail = {}
@@ -1951,14 +2018,17 @@ hook.add("postdrawtranslucentrenderables", "dr_sparks", function(depth, sky)
     if PULSE_BEAM.start and now - PULSE_BEAM.t < 0.42 then
         local fade = 1 - (now - PULSE_BEAM.t) / 0.42
         local flicker = 0.82 + 0.18 * math.sin(now * 83)
-        local width = math.max(20, DR.unit * DR.k * 0.24) * flicker
-        beam(PULSE_BEAM.start, PULSE_BEAM.finish, width * 2.8, Color(10, 80, 255, 95 * fade))
-        beam(PULSE_BEAM.start, PULSE_BEAM.finish, width, Color(0, 210, 255, 245 * fade))
-        beam(PULSE_BEAM.start, PULSE_BEAM.finish, width * 0.34, Color(240, 255, 255, 255 * fade))
-        pcall(function()
-            render.setMaterial(matLightningSprite)
-            render.draw3DSprite(PULSE_BEAM.start, width * 2.2, width * 2.2, Color(150, 240, 255, 245 * fade))
-        end)
+        local width = math.max(58, DR.unit * DR.k * 0.58) * flicker
+        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 4.2, pulseMats.striderBeam, Color(5, 45, 255, 78 * fade))
+        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 2.8, pulseMats.blueCore, Color(15, 115, 255, 145 * fade))
+        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 1.65, pulseMats.tpBeam, Color(0, 210, 255, 225 * fade))
+        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 0.85, pulseMats.blueShaft, Color(150, 245, 255, 250 * fade))
+        pulseBeamPass(PULSE_BEAM.start, PULSE_BEAM.finish, width * 0.34, pulseMats.magic, Color(245, 255, 255, 255 * fade))
+        local midpoint = (PULSE_BEAM.start + PULSE_BEAM.finish) * 0.5
+        pulseSprite(PULSE_BEAM.start, width * 3.0, pulseMats.spark, Color(100, 240, 255, 255 * fade))
+        pulseSprite(midpoint, width * 1.7, pulseMats.magic, Color(40, 180, 255, 180 * fade))
+        pulseSprite(PULSE_BEAM.finish, width * 4.0, pulseMats.blackBall, Color(40, 150, 255, 230 * fade))
+        pulseSprite(PULSE_BEAM.finish, width * 2.1, pulseMats.spark, Color(230, 250, 255, 255 * fade))
     end
 end)
 
