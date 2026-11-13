@@ -8,13 +8,14 @@
 BODY_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/drone%20body.obj"
 PROP_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/only%20propeller.obj"
 TEX_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/DRONreset_mein_BaseColor.png"
+VINT_TEX_URL = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/DRONreset_vint_BaseColor.png"
 
 SIZE       = 60        -- longest side of the BODY after auto-fit (propeller uses the same scale)
 SCALE      = nil       -- nil = auto-fit to SIZE
 MODEL_ANG  = nil       -- nil = auto. Or e.g. Angle(0, 90, 0)
 FLIP_V     = false      -- flip texture V
 FLIP_U     = false      -- flip texture U
-RENDER_INSIDE = true    -- show both sides (OBJ winding can vary)
+RENDER_INSIDE = false   -- cull backfaces; use true only for genuinely open/thin geometry
 RENDER_SMOOTH = 60     -- normal smoothing target in degrees (OBJ normals are preserved)
 AUTO_TEX_VARIANTS = false -- enable periodic texture UV variant suggestions in chat
 
@@ -39,7 +40,7 @@ MIRROR_PROPS = true    -- mirrored mesh for counter-rotating props (built in bac
 SPIN_SPEED   = 1400    -- degrees per second
 SPIN_RAMP    = 2
 
-SHOW_MARKERS = true    -- green spheres on props, white sphere on the pick (owner only)
+SHOW_MARKERS = false   -- enable only when positioning props (debug spheres cost render time)
 
 -- keys
 PICK_KEY  = 18   -- H  pick point under crosshair
@@ -146,8 +147,8 @@ if ISME then pcall(enableHud, player(), true) end
 -- materials ---------------------------------------------------------------
 S.dbgMat = material.load("models/debug/debugwhite")
 
-local function setTex(m, tag)
-    mset(m, "setTextureURL", "$basetexture", TEX_URL, function(_, _, w, h)
+local function setTex(m, tag, url)
+    mset(m, "setTextureURL", "$basetexture", url or TEX_URL, function(_, _, w, h)
         S.texOK = true
         say("[drone] texture '" .. tag .. "' loaded " .. tostring(w) .. "x" .. tostring(h))
     end)
@@ -163,7 +164,18 @@ do
     mset(S.matBase, "setVector", "$color2", ub)
 end
 
+S.matVint = material.create("UnlitGeneric")
+setTex(S.matVint, "vint", VINT_TEX_URL)
+mset(S.matVint, "setInt", "$nocull", RENDER_INSIDE and 1 or 0)
+do
+    local ub = Vector(UNLIT_BRIGHT, UNLIT_BRIGHT, UNLIT_BRIGHT)
+    mset(S.matVint, "setVector", "$color", ub)
+    mset(S.matVint, "setVector", "$color2", ub)
+end
+
 S.layers = { { S.matBase, 1, false } }
+S.layersMein = { { S.matBase, 1, false } }
+S.layersVint = { { S.matVint, 1, false } }
 if SHADE then
     -- additive lit layer on top: adds real lighting/shading
     S.matShade = material.create("VertexLitGeneric")
@@ -229,8 +241,9 @@ local function ri(i, n)
 end
 
 local function parseOBJ(body, label)
-    local V, T, N, F = {}, {}, {}, {}
+    local V, T, N, F, MAT = {}, {}, {}, {}, {}
     local nv, nt, nn, nf = 0, 0, 0, 0
+    local activeMat = 1
     local lineN, skipped = 0, 0
     local umin, umax, vmin, vmax = 1e9, -1e9, 1e9, -1e9
     local iv, it, inn = {}, {}, {}
@@ -256,7 +269,9 @@ local function parseOBJ(body, label)
         if sfind(line, "\t", 1, true) then line = string.gsub(line, "\t", " ") end
 
         local c1 = line:byte(1)
-        if c1 == 118 then -- 'v'
+        if ssub(line, 1, 7) == "usemtl " then
+            activeMat = sfind(ssub(line, 8), "vint", 1, true) and 2 or 1
+        elseif c1 == 118 then -- 'v'
             local c2 = line:byte(2)
             if c2 == 32 then
                 local x, y, z = nums(line, 3)
@@ -316,6 +331,7 @@ local function parseOBJ(body, label)
                 F[o + 4], F[o + 5], F[o + 6] = iv[k], it[k], inn[k]
                 F[o + 7], F[o + 8], F[o + 9] = iv[k + 1], it[k + 1], inn[k + 1]
                 nf = nf + 1
+                MAT[nf] = activeMat
             end
         end
         lineN = lineN + 1
@@ -349,17 +365,17 @@ local function parseOBJ(body, label)
     if nt == 0 then
         say("[drone] WARNING: " .. label .. " has no UV coordinates, so no texture can show. Export the OBJ from Blender with UVs enabled.")
     end
-    return { V = V, T = T, N = N, F = F, nv = nv, nf = nf, nt = nt,
+    return { V = V, T = T, N = N, F = F, MAT = MAT, nv = nv, nf = nf, nt = nt,
              mn = Vector(mnx, mny, mnz), mx = Vector(mxx, mxy, mxz) }
 end
 
 ---------------------------------------------------------------------------
 -- MESH BUILDING (chunked, few temp tables)
 ---------------------------------------------------------------------------
-local CH = 6000 -- vertices per mesh chunk (multiple of 3); balances mesh-call CPU against hologram quota
+local CH = 12000 -- vertices per mesh chunk (multiple of 3); keep hologram count/render cost down
 
 -- mir: nil or axis index (1,2,3) to mirror on (winding + normals get fixed)
-local function buildVerts(P, c, sc, mir)
+local function buildVerts(P, c, sc, mir, onlyMat)
     local V, T, N, F = P.V, P.T, P.N, P.F
     local cx, cy, cz = c.x, c.y, c.z
     local chunks = {}
@@ -370,6 +386,7 @@ local function buildVerts(P, c, sc, mir)
     local flip = FLIP_V
 
     for t = 0, P.nf - 1 do
+        if not onlyMat or P.MAT[t + 1] == onlyMat then
         local b = t * 9
         for k = 1, 3 do
             local o = b + offs[k]
@@ -413,6 +430,7 @@ local function buildVerts(P, c, sc, mir)
             cn = cn + 1
             cur[cn] = { pos = Vector(px[k], py[k], pz[k]), normal = Vector(nx, ny, nz), u = u, v = v }
         end
+        end
         if t % 150 == 0 then pace() end
     end
     return chunks
@@ -451,11 +469,12 @@ local function applyScale(list)
     end
 end
 
-local function makeHolos(meshes)
+local function makeHolos(meshes, useLayers)
     local out = {}
     local r = SIZE
+    local layers = useLayers or S.layers
     for _, m in ipairs(meshes) do
-        for _, L in ipairs(S.layers) do
+        for _, L in ipairs(layers) do
             if hologram.hologramsLeft and hologram.hologramsLeft() < 1 then
                 say("[drone] out of holograms!")
                 applyScale(out)
@@ -484,7 +503,7 @@ local function ensureHolos(p)
     if p.holos or not S.pm then return end
     local ml = S.pm[p.dir] or S.pm[1]
     if not ml then return end
-    p.holos = makeHolos(ml)
+    p.holos = makeHolos(ml, S.layersVint)
 end
 
 local function addProp(pos, dir)
@@ -575,11 +594,16 @@ local function loadBody()
     S.bmax = (pb.mx - bc) * sc + Vector(0.5, 0.5, 0.5)
     S.info[#S.info + 1] = string.format("body raw %.3f x %.3f x %.3f, scale %.6f", dims[1], dims[2], dims[3], sc)
 
-    local meshes = makeMeshes(buildVerts(pb, bc, sc, nil))
-    if not meshes then return end
+    -- OBJ usemtl groups need their matching atlas. The two drone materials use
+    -- separate BaseColor images; applying one atlas to every face looks scrambled.
+    local meinMeshes = makeMeshes(buildVerts(pb, bc, sc, nil, 1))
+    local vintMeshes = makeMeshes(buildVerts(pb, bc, sc, nil, 2))
+    if not meinMeshes or not vintMeshes then return end
 
     S.hpos = chip():getPos() + Vector(0, 0, HOVER_HEIGHT)
-    S.body = makeHolos(meshes)
+    S.body = makeHolos(meinMeshes, S.layersMein)
+    local vintHolos = makeHolos(vintMeshes, S.layersVint)
+    for _, e in ipairs(vintHolos) do S.body[#S.body + 1] = e end
     if #S.body == 0 then
         say("[drone] ERROR: mesh data built but no body holograms were created; check hologram quota/model carrier")
         return
@@ -835,7 +859,7 @@ end
 -- DRAWING (debug markers)
 ---------------------------------------------------------------------------
 local function draw3D()
-    if not ISME or not S.ready then return end
+    if not ISME or not S.ready or (not S.show and not S.axes) then return end
     pcall(render.overrideDepthEnable, true, false)
     render.setMaterial(S.dbgMat)
     local r = SIZE * 0.012 * S.k
@@ -1014,6 +1038,8 @@ C["!bright"] = function(a)
     local v = Vector(n, n, n)
     mset(S.matBase, "setVector", "$color", v)
     mset(S.matBase, "setVector", "$color2", v)
+    mset(S.matVint, "setVector", "$color", v)
+    mset(S.matVint, "setVector", "$color2", v)
     say("[drone] base brightness " .. n)
 end
 C["!shade"] = function()
