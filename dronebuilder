@@ -20,7 +20,7 @@ AUTO_TEX_VARIANTS = false -- enable periodic texture UV variant suggestions in c
 
 -- look
 UNLIT_BRIGHT   = 0.7   -- base texture brightness, no lighting needed (raise if too dark)
-SHADE          = true  -- extra additive lit layer on top (gives shading)
+SHADE          = false -- optional additive layer; off by default to conserve hologram quota
 SHADE_STRENGTH = 1.0
 
 -- loading
@@ -356,7 +356,7 @@ end
 ---------------------------------------------------------------------------
 -- MESH BUILDING (chunked, few temp tables)
 ---------------------------------------------------------------------------
-local CH = 3000 -- vertices per mesh chunk (multiple of 3); createFromTable is one non-yielding CPU call
+local CH = 6000 -- vertices per mesh chunk (multiple of 3); balances mesh-call CPU against hologram quota
 
 -- mir: nil or axis index (1,2,3) to mirror on (winding + normals get fixed)
 local function buildVerts(P, c, sc, mir)
@@ -580,6 +580,10 @@ local function loadBody()
 
     S.hpos = chip():getPos() + Vector(0, 0, HOVER_HEIGHT)
     S.body = makeHolos(meshes)
+    if #S.body == 0 then
+        say("[drone] ERROR: mesh data built but no body holograms were created; check hologram quota/model carrier")
+        return
+    end
     S.ready = true
     say(string.format("[drone] body shown (%d holograms) after %.1fs. Loading propellers...", #S.body, systime() - S.t0))
     S.bodyDone = true
