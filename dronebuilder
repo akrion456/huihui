@@ -12,7 +12,11 @@ TEX_URL  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/D
 SIZE       = 60        -- longest side of the BODY after auto-fit (propeller uses the same scale)
 SCALE      = nil       -- nil = auto-fit to SIZE
 MODEL_ANG  = nil       -- nil = auto. Or e.g. Angle(0, 90, 0)
-FLIP_V     = false      -- flip texture V (try false if the texture looks upside down / wrong)
+FLIP_V     = false      -- flip texture V
+FLIP_U     = false      -- flip texture U
+RENDER_INSIDE = true    -- show both sides (OBJ winding can vary)
+RENDER_SMOOTH = 60     -- normal smoothing target in degrees (OBJ normals are preserved)
+AUTO_TEX_VARIANTS = false -- enable periodic texture UV variant suggestions in chat
 
 -- look
 UNLIT_BRIGHT   = 0.7   -- base texture brightness, no lighting needed (raise if too dark)
@@ -94,7 +98,7 @@ local S = {
     jobs = {}, errT = {}, body = {}, props = {},
     hpos = Vector(), hang = Angle(), ang = Angle(),
     propAng = Angle(PROP_ANG.p, PROP_ANG.y, PROP_ANG.r),
-    k = 1, spinA = 0, rpm = 0, speed = SPIN_SPEED, spinOn = true,
+    k = 1, spinA = 0, rpm = 0, speed = SPIN_SPEED, spinOn = false,
     ready = false, picking = false, live = false, axes = false, show = SHOW_MARKERS,
     propAxis = 3, upModel = 3, hookFired = false, lastCmdT = -10, info = {},
     deadline = 0, shadeOn = SHADE, texOK = false, t0 = systime(),
@@ -152,7 +156,7 @@ end
 -- base layer: UNLIT, so the texture is always visible regardless of lighting
 S.matBase = material.create("UnlitGeneric")
 setTex(S.matBase, "base")
-mset(S.matBase, "setInt", "$nocull", 1)
+mset(S.matBase, "setInt", "$nocull", RENDER_INSIDE and 1 or 0)
 do
     local ub = Vector(UNLIT_BRIGHT, UNLIT_BRIGHT, UNLIT_BRIGHT)
     mset(S.matBase, "setVector", "$color", ub)
@@ -165,7 +169,7 @@ if SHADE then
     S.matShade = material.create("VertexLitGeneric")
     setTex(S.matShade, "shade")
     mset(S.matShade, "setInt", "$additive", 1)
-    mset(S.matShade, "setInt", "$nocull", 1)
+    mset(S.matShade, "setInt", "$nocull", RENDER_INSIDE and 1 or 0)
     mset(S.matShade, "setVector", "$color2", Vector(SHADE_STRENGTH, SHADE_STRENGTH, SHADE_STRENGTH))
     S.layers[2] = { S.matShade, 1.004, true }
 end
@@ -399,6 +403,7 @@ local function buildVerts(P, c, sc, mir)
             local ti = tia[k]
             if ti > 0 then
                 u, v = T[ti * 2 - 1], T[ti * 2]
+                if FLIP_U then u = 1 - u end
                 if flip then v = 1 - v end
             end
             if cn >= CH then
@@ -912,7 +917,7 @@ C["!help"] = function()
     say("[drone] !pick !add [dir] !quad !orig !set x y z !x/!y/!z n !nudge dx dy dz !live")
     say("[drone] !move n dx dy dz !lift n !dir n !remove n !undo !clear !list")
     say("[drone] !spin !speed n !axis n !ang p y r !yaw n !propang p y r !scale n !show !axes !info !hud")
-    say("[drone] LOOK: !bright n (base brightness) | !shade (toggle lit layer) | !tex <url> (reload texture)")
+    say("[drone] LOOK: !bright n | !shade | !tex <url> | !flipv | !flipu | !inside | !variants")
 end
 C["!pick"]  = function() startPick() end
 C["!add"]   = function(a) if needPick() then addProp(S.pick, a[2]); say("[drone] added propeller #" .. #S.props) end end
@@ -1021,6 +1026,13 @@ C["!tex"] = function(a)
     if S.matShade then setTex(S.matShade, "shade") end
     say("[drone] reloading texture from " .. TEX_URL)
 end
+C["!flipv"] = function() say("[drone] UV V flip is baked during mesh build; set FLIP_V at the top of dronebuilder, then reload the script") end
+C["!flipu"] = function() say("[drone] UV U flip is baked during mesh build; set FLIP_U at the top of dronebuilder, then reload the script") end
+C["!inside"] = function() say("[drone] two-sided render is " .. tostring(RENDER_INSIDE) .. "; change RENDER_INSIDE at the top and reload") end
+C["!variants"] = function()
+    AUTO_TEX_VARIANTS = not AUTO_TEX_VARIANTS
+    say("[drone] automatic texture variant suggestions " .. tostring(AUTO_TEX_VARIANTS) .. " (prints UV flip combinations once per second)")
+end
 C["!show"] = function() S.show = not S.show; say("[drone] markers " .. tostring(S.show)) end
 C["!axes"] = function() S.axes = not S.axes; say("[drone] axes " .. tostring(S.axes) .. " (red X, green Y, blue Z)") end
 C["!info"] = function()
@@ -1044,3 +1056,9 @@ local function handleChat(text)
 end
 
 net.receive("drone_cmd", function() handleChat(net.readString()) end)
+
+timer.create("drone_texvariants", 1, 0, function()
+    if ISME and AUTO_TEX_VARIANTS then
+        say("[drone] texture variants: A original (U off/V off), B vertical flip (U off/V on), C horizontal flip (U on/V off), D both flips (U on/V on). Set FLIP_U/FLIP_V above and reload to compare; texture loads " .. tostring(S.texOK))
+    end
+end)
