@@ -1,0 +1,766 @@
+--@name Drone OBJ + Seat + Flight
+--@author
+--@shared
+
+-- only the owner builds / hears the drone (same as your example)
+if CLIENT and player() ~= owner() then return end
+
+------------------------------------------------------------
+-- SETTINGS
+------------------------------------------------------------
+local SCALE      = 100         -- drone size (was 30)
+local OFFSET     = Vector(0, 0, 0)
+local TEX_LAYOUT = 1024
+local FLIP_V     = true
+
+-- body numbers from your log (OBJ units)
+local BODY_MINZ, BODY_MAXZ = -2.3573, 0.5321
+local DROP_Z      = -BODY_MINZ * SCALE                 -- body bottom sits on the chip
+local TOP_Z       = (BODY_MAXZ - BODY_MINZ) * SCALE    -- top of the body
+local HOLO_RADIUS = 8 * SCALE
+
+-- propeller copies: mirrored from the upper-left propeller around (0,0).
+-- gx, gy were measured at scale 30, so MEASURED_SCALE stays 30 whatever SCALE is.
+local MEASURED_SCALE = 30
+local COPIES = {
+    { rx = false, ry = true,  gx = 0.6152, gy =  0.0470 },   -- x-,y-
+    { rx = true,  ry = true,  gx = 1.5536, gy =  0.9726 },   -- x+,y-
+    { rx = true,  ry = false, gx = 0.9434, gy = -0.9266 },   -- x+,y+
+}
+local CX, CY = 0, 0
+
+-- build pacing
+local FRAME_FRAC  = 0.60       -- lower to 0.30 if the chip ever dies with a nil error
+local GATE        = 0.85
+local PARSE_LINES = 500
+local TRI_STEP    = 300
+local MAX_TRIS    = 6000
+local MATERIAL_MAP = {}
+
+-- seat
+local SEAT_MODEL  = "models/nova/airboat_seat.mdl"
+local SEAT_OFFSET = Vector(0, 0, 0)    -- move the seat relative to "top center" (use negative Z to sink it in)
+local SEAT_YAW    = -90                -- seat turned so it faces the drone's forward (X)
+
+-- flight
+local STRAFE_MODE  = false     -- false: A/D turn the drone | true: A/D strafe, arrow keys turn
+local MAX_SPEED    = 1100      -- units/s
+local ACCEL        = 2.0       -- how fast speed follows the keys
+local TURN_SPEED   = 70        -- deg/s
+local CLIMB_SPEED  = 500       -- Space / Ctrl, units/s
+local MAX_VERT     = 700
+local TAKEOFF_H    = 260       -- height gained when you press G
+local MIN_ALT      = 12        -- lowest allowed height above ground while flying
+local MAX_HEIGHT   = 8000
+local LAND_HEIGHT  = 70        -- you must be this close to the ground to switch propellers off
+
+-- sound / propellers
+local ENGINE_VOL = 0.7
+local ROTOR_VOL  = 1.0
+local FADE_TIME  = 0.7         -- seconds for the propeller sound to fade in/out
+local SPIN_PROPS = true
+local SPIN_SPEED = 1800        -- deg/s at full speed
+
+local URL_BODY = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/drone%20body.obj"
+local URL_PROP = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/only%20propeller.obj"
+local TEX_URL = {
+    mein = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/DRONreset_mein_BaseColor.png",
+    vint = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/DRONreset_vint_BaseColor.png",
+}
+local URL_ENGINE = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/loopdronengine.mp3"
+local URL_ROTOR  = "https://raw.githubusercontent.com/akrion456/huihui/refs/heads/main/ithinkloopdronfly.mp3"
+
+------------------------------------------------------------
+-- helpers
+------------------------------------------------------------
+local floor, min, max, sqrt, huge = math.floor, math.min, math.max, math.sqrt, math.huge
+local find, sub, byte, lower = string.find, string.sub, string.byte, string.lower
+
+local function say(s) print("[Drone] " .. s) end
+
+local function errText(e)
+    if type(e) == "table" then
+        return tostring(e.message or e[1] or "table error")
+    end
+    return tostring(e)
+end
+
+local function clamp(v, a, b) return v < a and a or (v > b and b or v) end
+
+------------------------------------------------------------
+-- SERVER: seat + engine + flight
+------------------------------------------------------------
+if SERVER then
+    local seat = nil
+    local engineOn, rotorsOn = false, false
+    local alt = 0
+    local lastT = timer.curtime()
+    local lastErr = nil
+
+    local function sync()
+        net.start("drone_state")
+        net.writeBool(engineOn)
+        net.writeBool(rotorsOn)
+        net.send(owner())
+    end
+
+    -- seat in the top center of the drone, parented to the chip
+    local tries = 0
+    local function makeSeat()
+        tries = tries + 1
+        if tries > 40 then say("could not create the seat") return end
+        if not prop.canSpawn() then timer.simple(0.3, makeSeat) return end
+        local c = chip()
+        local ok, s = pcall(prop.createSeat,
+            c:localToWorld(Vector(0, 0, TOP_Z) + SEAT_OFFSET),
+            c:localToWorldAngles(Angle(0, SEAT_YAW, 0)),
+            SEAT_MODEL, true)
+        if not ok or not s or not s:isValid() then
+            if not ok then say("seat error: " .. errText(s)) end
+            timer.simple(0.5, makeSeat)
+            return
+        end
+        s:setParent(c)
+        seat = s
+        say("seat ready. Sit down: R = engine, G = propellers")
+    end
+    makeSeat()
+
+    local function groundZ()
+        local p = chip():getPos()
+        local tr = trace.line(p, p - Vector(0, 0, 30000), { chip(), seat })
+        if tr and tr.Hit then return tr.HitPos.z end
+        return nil
+    end
+
+    local function getPhys()
+        local ph = chip():getPhysicsObject()
+        if ph and ph:isValid() then return ph end
+        return nil
+    end
+
+    local function toggleEngine()
+        if engineOn then
+            if rotorsOn then
+                say("Land first and switch the propellers off (G), then R")
+                return
+            end
+            engineOn = false
+            say("Engine OFF")
+        else
+            engineOn = true
+            local ph = getPhys()
+            if ph then ph:enableMotion(true) ph:wake() end
+            say("Engine ON - press G to start the propellers")
+        end
+        sync()
+    end
+
+    local function toggleRotors()
+        if not engineOn then say("Start the engine first (R)") return end
+        local ph = getPhys()
+        if rotorsOn then
+            local gz = groundZ()
+            if gz and chip():getPos().z - gz > LAND_HEIGHT then
+                say("Too high - lower the drone to the ground first (Ctrl)")
+                return
+            end
+            rotorsOn = false
+            if ph then ph:enableGravity(true) end
+            say("Propellers OFF")
+        else
+            rotorsOn = true
+            local gz = groundZ()
+            local z = chip():getPos().z
+            alt = max(z, (gz or z) + TAKEOFF_H)
+            if ph then ph:enableMotion(true) ph:wake() ph:enableGravity(false) end
+            say("Propellers ON - taking off")
+        end
+        sync()
+    end
+
+    net.receive("drone_key", function(len, ply)
+        if not (seat and seat:isValid()) then return end
+        local d = seat:getDriver()
+        if not d or not d:isValid() or d ~= ply then return end
+        local code = net.readUInt(2)
+        if code == 1 then toggleEngine() elseif code == 2 then toggleRotors() end
+    end)
+
+    local function control(dt)
+        local e = chip()
+        local ph = getPhys()
+        if not ph then return end
+
+        local ang = e:getAngles()
+        local drv = nil
+        if seat and seat:isValid() then
+            local d = seat:getDriver()
+            if d and d:isValid() then drv = d end
+        end
+
+        local turn, fwdIn, strafeIn, upIn = 0, 0, 0, 0
+        if drv and rotorsOn then
+            local function dn(k) return drv:keyDown(k) and 1 or 0 end
+            fwdIn = dn(IN_KEY.FORWARD) - dn(IN_KEY.BACK)
+            upIn  = dn(IN_KEY.JUMP) - dn(IN_KEY.DUCK)
+            if STRAFE_MODE then
+                strafeIn = dn(IN_KEY.MOVERIGHT) - dn(IN_KEY.MOVELEFT)
+                turn = dn(IN_KEY.LEFT) - dn(IN_KEY.RIGHT)
+            else
+                turn = dn(IN_KEY.MOVELEFT) - dn(IN_KEY.MOVERIGHT)
+            end
+        end
+        local yawRate = turn * TURN_SPEED
+
+        -- keep the drone level, only yaw is free
+        if math.abs(ang.p) > 2 or math.abs(ang.r) > 2 then
+            e:setAngles(Angle(0, ang.y, 0))
+        end
+        if ph.setAngleVelocity then
+            ph:setAngleVelocity(Vector(0, 0, yawRate))
+        elseif yawRate ~= 0 then
+            e:setAngles(Angle(0, ang.y + yawRate * dt, 0))
+        end
+
+        if not rotorsOn then return end
+
+        local yawAng = Angle(0, ang.y, 0)
+        local wish = yawAng:getForward() * (fwdIn * MAX_SPEED) + yawAng:getRight() * (strafeIn * MAX_SPEED)
+
+        local pos = e:getPos()
+        local gz = groundZ()
+        alt = alt + upIn * CLIMB_SPEED * dt
+        if gz then alt = clamp(alt, gz + MIN_ALT, gz + MAX_HEIGHT) end
+        local vz = clamp((alt - pos.z) * 2.5, -MAX_VERT, MAX_VERT)
+
+        local v = ph:getVelocity()
+        local k = min(1, ACCEL * dt)
+        local kz = min(1, 8 * dt)
+        ph:setVelocity(Vector(
+            v.x + (wish.x - v.x) * k,
+            v.y + (wish.y - v.y) * k,
+            v.z + (vz - v.z) * kz))
+    end
+
+    hook.add("tick", "DroneFly", function()
+        local now = timer.curtime()
+        local dt = min(now - lastT, 0.1)
+        lastT = now
+        if not engineOn or dt <= 0 then return end
+        local ok, err = pcall(control, dt)
+        if not ok then
+            local t = errText(err)
+            if t ~= lastErr then lastErr = t say("flight error: " .. t) end
+        end
+    end)
+
+    return
+end
+
+------------------------------------------------------------
+-- CLIENT from here on
+------------------------------------------------------------
+
+-- state from the server
+local target  = { engine = 0, rotor = 0 }
+local vol     = { engine = 0, rotor = 0 }
+local MAXVOL  = { engine = ENGINE_VOL, rotor = ROTOR_VOL }
+local snd     = {}
+local playing = {}
+
+net.receive("drone_state", function()
+    local e = net.readBool()
+    local r = net.readBool()
+    target.engine = e and 1 or 0
+    target.rotor  = r and 1 or 0
+end)
+
+-- R / G while sitting -> server
+local function sendKey(code)
+    net.start("drone_key")
+    net.writeUInt(code, 2)
+    net.send()
+end
+
+hook.add("inputPressed", "DroneKeys", function(key)
+    if not player():inVehicle() then return end
+    if key == KEY.R then sendKey(1)
+    elseif key == KEY.G then sendKey(2) end
+end)
+
+-- looped sounds
+local function loadSound(name, url)
+    bass.loadURL(url, "3d noplay", function(s, err, errName)
+        if not s then say("sound " .. name .. " failed: " .. tostring(errName)) return end
+        s:setLooping(true)
+        s:setVolume(0)
+        s:setFade(1500, 9000)
+        s:setPos(chip():getPos())
+        snd[name] = s
+        say("sound " .. name .. " loaded")
+    end)
+end
+loadSound("engine", URL_ENGINE)
+loadSound("rotor", URL_ROTOR)
+
+-- propellers that can spin: { holos = {...}, dir = 1 / -1 }
+local props = {}
+
+------------------------------------------------------------
+-- materials
+------------------------------------------------------------
+local mats = {}
+for key, url in pairs(TEX_URL) do
+    local m = material.create("VertexLitGeneric")
+    m:setInt("$flags", 8192)
+    m:setTextureURL("$basetexture", url, function(mat, u, w, h, layout)
+        layout(0, 0, TEX_LAYOUT, TEX_LAYOUT)
+    end)
+    mats[key] = m
+end
+
+local function matKey(name, idx, default)
+    if MATERIAL_MAP[name] then return MATERIAL_MAP[name] end
+    local l = lower(name)
+    if find(l, "vint", 1, true) then return "vint" end
+    if find(l, "mein", 1, true) then return "mein" end
+    if default then return default end
+    return (idx % 2 == 1) and "mein" or "vint"
+end
+
+------------------------------------------------------------
+-- step scheduler (no coroutines)
+------------------------------------------------------------
+local task = nil
+local pending = {}
+local frameBreak = false
+
+------------------------------------------------------------
+-- OBJ parser (no patterns, incremental)
+------------------------------------------------------------
+local function num3(s, p, e)
+    local o1, o2, o3
+    local k = 0
+    while p < e and k < 3 do
+        while p < e and byte(s, p) == 32 do p = p + 1 end
+        if p >= e then break end
+        local q = find(s, " ", p, true)
+        if not q or q > e then q = e end
+        local n = tonumber(sub(s, p, q - 1))
+        k = k + 1
+        if k == 1 then o1 = n elseif k == 2 then o2 = n else o3 = n end
+        p = q + 1
+    end
+    return o1, o2, o3
+end
+
+local function parseFV(tok)
+    local s1 = find(tok, "/", 1, true)
+    if not s1 then return tonumber(tok), nil, nil end
+    local a = tonumber(sub(tok, 1, s1 - 1))
+    local s2 = find(tok, "/", s1 + 1, true)
+    local b, c
+    if s2 then
+        b = tonumber(sub(tok, s1 + 1, s2 - 1))
+        c = tonumber(sub(tok, s2 + 1))
+    else
+        b = tonumber(sub(tok, s1 + 1))
+    end
+    return a, b, c
+end
+
+local function startParse(text, label, onDone)
+    local m = {
+        vx = {}, vy = {}, vz = {}, tu = {}, tv = {}, nx = {}, ny = {}, nz = {},
+        fv = {}, ft = {}, fn = {}, groups = {}, order = {},
+    }
+    local vx, vy, vz, tu, tv, nx, ny, nz = m.vx, m.vy, m.vz, m.tu, m.tv, m.nx, m.ny, m.nz
+    local fv, ft, fn = m.fv, m.ft, m.fn
+    local nV, nT, nN, nTri = 0, 0, 0, 0
+
+    local function setGroup(name)
+        if not m.groups[name] then
+            m.groups[name] = {}
+            m.order[#m.order + 1] = name
+        end
+        return m.groups[name]
+    end
+    local cur = setGroup("default")
+
+    local len = #text
+    local pos = 1
+    local lines = 0
+    local nextReport = 0.5
+    local fa, fb, fc = {}, {}, {}
+
+    local function step()
+        local stop = lines + PARSE_LINES
+        while pos <= len and lines < stop do
+            local e = find(text, "\n", pos, true) or (len + 1)
+            local b1 = byte(text, pos)
+            if b1 == 118 then -- v
+                local b2 = byte(text, pos + 1)
+                if b2 == 32 then
+                    local x, y, z = num3(text, pos + 2, e)
+                    if x and y and z then
+                        nV = nV + 1
+                        vx[nV], vy[nV], vz[nV] = x, y, z
+                    end
+                elseif b2 == 116 then
+                    local u, v = num3(text, pos + 3, e)
+                    nT = nT + 1
+                    tu[nT], tv[nT] = u or 0, v or 0
+                elseif b2 == 110 then
+                    local x, y, z = num3(text, pos + 3, e)
+                    nN = nN + 1
+                    nx[nN], ny[nN], nz[nN] = x or 0, y or 0, z or 1
+                end
+            elseif b1 == 102 and byte(text, pos + 1) == 32 then -- f
+                local p = pos + 2
+                local n = 0
+                while p < e do
+                    while p < e and byte(text, p) == 32 do p = p + 1 end
+                    if p >= e then break end
+                    local q = find(text, " ", p, true)
+                    if not q or q > e then q = e end
+                    local tok = sub(text, p, q - 1)
+                    local lb = byte(tok, #tok)
+                    if lb == 13 then tok = sub(tok, 1, #tok - 1) end
+                    if #tok > 0 then
+                        local a, b, c = parseFV(tok)
+                        if a then
+                            if a < 0 then a = nV + a + 1 end
+                            if b and b < 0 then b = nT + b + 1 end
+                            if c and c < 0 then c = nN + c + 1 end
+                            n = n + 1
+                            fa[n], fb[n], fc[n] = a, b or 0, c or 0
+                        end
+                    end
+                    p = q + 1
+                end
+                for i = 2, n - 1 do
+                    nTri = nTri + 1
+                    local k = nTri * 3 - 2
+                    fv[k], fv[k + 1], fv[k + 2] = fa[1], fa[i], fa[i + 1]
+                    ft[k], ft[k + 1], ft[k + 2] = fb[1], fb[i], fb[i + 1]
+                    fn[k], fn[k + 1], fn[k + 2] = fc[1], fc[i], fc[i + 1]
+                    cur[#cur + 1] = nTri
+                end
+            elseif b1 == 117 and sub(text, pos, pos + 5) == "usemtl" then
+                local name = sub(text, pos + 7, e - 1)
+                while #name > 0 do
+                    local lb = byte(name, #name)
+                    if lb == 13 or lb == 32 then name = sub(name, 1, #name - 1) else break end
+                end
+                cur = setGroup(name)
+            end
+            pos = e + 1
+            lines = lines + 1
+        end
+
+        if pos <= len then
+            if pos / len >= nextReport then
+                say(label .. " parsing " .. floor(nextReport * 100) .. "%")
+                nextReport = nextReport + 0.5
+            end
+            task = step
+        else
+            say(label .. " parsed: " .. nTri .. " tris")
+            onDone(m)
+        end
+    end
+    task = step
+end
+
+------------------------------------------------------------
+-- mesh / hologram emission (incremental)
+-- job: model, tris, mkey, rx, ry, sx, sy, px, py (pivot, OBJ units), holos (optional list)
+------------------------------------------------------------
+local X, Y, Z = {0, 0, 0}, {0, 0, 0}, {0, 0, 0}
+
+local function emitChunks(j, done)
+    local model, tris, mkey = j.model, j.tris, j.mkey
+    local rx, ry, sx, sy = j.rx, j.ry, j.sx, j.sy
+    local px, py = j.px or 0, j.py or 0
+    local total = #tris
+    if total == 0 then task = done return end
+
+    local fv, ft, fn = model.fv, model.ft, model.fn
+    local vx, vy, vz = model.vx, model.vy, model.vz
+    local tu, tv, nx, ny, nz = model.tu, model.tv, model.nx, model.ny, model.nz
+    local flipped = (rx ~= ry)
+    local cx, cy = CX, CY
+
+    local pos, last, k, verts, vn, msh = 1, 0, 1, nil, 0, nil
+    local nextChunk, build, makeMesh, spawn
+
+    nextChunk = function()
+        if pos > total then done() return end
+        last = min(pos + MAX_TRIS - 1, total)
+        verts, vn = {}, 0
+        k = pos
+        task = build
+    end
+
+    build = function()
+        local stop = min(k + TRI_STEP - 1, last)
+        for kk = k, stop do
+            local t = tris[kk]
+            local i = t * 3 - 2
+            local needFlat = false
+            for q = 1, 3 do
+                local vi = fv[i + q - 1]
+                local x, y, z = vx[vi], vy[vi], vz[vi]
+                if rx then x = 2 * cx - x end
+                if ry then y = 2 * cy - y end
+                X[q], Y[q], Z[q] = x + sx, y + sy, z
+                if fn[i + q - 1] == 0 then needFlat = true end
+            end
+
+            local fnx, fny, fnz = 0, 0, 1
+            if needFlat then
+                local ax, ay, az = X[2] - X[1], Y[2] - Y[1], Z[2] - Z[1]
+                local bx, by, bz = X[3] - X[1], Y[3] - Y[1], Z[3] - Z[1]
+                fnx, fny, fnz = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
+                local l = sqrt(fnx * fnx + fny * fny + fnz * fnz)
+                if l > 0 then fnx, fny, fnz = fnx / l, fny / l, fnz / l end
+                if flipped then fnx, fny, fnz = -fnx, -fny, -fnz end
+            end
+
+            for s = 1, 3 do
+                local q
+                if flipped then q = s else q = (s == 1) and 1 or (s == 2 and 3 or 2) end
+                local ni = fn[i + q - 1]
+                local ax, ay, az
+                if ni > 0 then
+                    ax, ay, az = nx[ni], ny[ni], nz[ni]
+                    if rx then ax = -ax end
+                    if ry then ay = -ay end
+                else
+                    ax, ay, az = fnx, fny, fnz
+                end
+                local ti = ft[i + q - 1]
+                local u, v = 0, 0
+                if ti > 0 then
+                    u = tu[ti]
+                    v = FLIP_V and (1 - tv[ti]) or tv[ti]
+                end
+                vn = vn + 1
+                verts[vn] = {
+                    pos = Vector((X[q] - px) * SCALE, (Y[q] - py) * SCALE, Z[q] * SCALE),
+                    normal = Vector(ax, ay, az),
+                    u = u, v = v,
+                }
+            end
+        end
+        k = stop + 1
+        if k <= last then task = build else task = makeMesh end
+    end
+
+    makeMesh = function()
+        if mesh.trianglesLeft() < (last - pos + 1) then
+            task = makeMesh
+            frameBreak = true
+            return
+        end
+        msh = mesh.createFromTable(verts)
+        verts = nil
+        frameBreak = true
+        task = spawn
+    end
+
+    spawn = function()
+        if not hologram.canSpawn() then
+            task = spawn
+            frameBreak = true
+            return
+        end
+        local h = hologram.create(
+            chip():localToWorld(OFFSET + Vector(px * SCALE, py * SCALE, DROP_Z)),
+            chip():getAngles(),
+            "models/hunter/blocks/cube025x025x025.mdl"
+        )
+        h:setMesh(msh)
+        h:setMeshMaterial(mats[mkey])
+        h:setParent(chip())
+        h:setRenderBounds(Vector(-HOLO_RADIUS, -HOLO_RADIUS, -HOLO_RADIUS), Vector(HOLO_RADIUS, HOLO_RADIUS, HOLO_RADIUS))
+        if j.holos then j.holos[#j.holos + 1] = h end
+        msh = nil
+        pos = last + 1
+        frameBreak = true
+        task = nextChunk
+    end
+
+    task = nextChunk
+end
+
+local function runJobs(jobs, finish)
+    local function run(n)
+        local j = jobs[n]
+        if not j then finish() return end
+        emitChunks(j, function()
+            task = function() run(n + 1) end
+        end)
+    end
+    task = function() run(1) end
+end
+
+------------------------------------------------------------
+-- pipelines
+------------------------------------------------------------
+local function propPipeline(text)
+    startParse(text, "propeller", function(prop)
+        -- propeller center = center of its bounding box (spin pivot)
+        local minx, maxx, miny, maxy = huge, -huge, huge, -huge
+        for i = 1, #prop.vx do
+            local x, y = prop.vx[i], prop.vy[i]
+            if x < minx then minx = x end
+            if x > maxx then maxx = x end
+            if y < miny then miny = y end
+            if y > maxy then maxy = y end
+        end
+        local pcx, pcy = (minx + maxx) / 2, (miny + maxy) / 2
+
+        local jobs = {}
+
+        -- original upper-left propeller, untouched
+        local orig = { holos = {}, dir = 1 }
+        props[#props + 1] = orig
+        for gi = 1, #prop.order do
+            local name = prop.order[gi]
+            jobs[#jobs + 1] = {
+                model = prop, tris = prop.groups[name], mkey = matKey(name, gi, "vint"),
+                rx = false, ry = false, sx = 0, sy = 0, px = pcx, py = pcy, holos = orig.holos,
+            }
+        end
+
+        -- 3 exact copies (neighbours spin the opposite way)
+        for _, c in ipairs(COPIES) do
+            local sx, sy = c.gx / MEASURED_SCALE, c.gy / MEASURED_SCALE
+            local qx = c.rx and (2 * CX - pcx) or pcx
+            local qy = c.ry and (2 * CY - pcy) or pcy
+            local rec = { holos = {}, dir = (c.rx ~= c.ry) and -1 or 1 }
+            props[#props + 1] = rec
+            for gi = 1, #prop.order do
+                local name = prop.order[gi]
+                jobs[#jobs + 1] = {
+                    model = prop, tris = prop.groups[name], mkey = matKey(name, gi, "vint"),
+                    rx = c.rx, ry = c.ry, sx = sx, sy = sy,
+                    px = qx + sx, py = qy + sy, holos = rec.holos,
+                }
+            end
+        end
+
+        runJobs(jobs, function()
+            say("propellers DONE")
+            task = nil
+        end)
+    end)
+end
+
+local function bodyPipeline(text)
+    startParse(text, "body", function(body)
+        local jobs = {}
+        for gi = 1, #body.order do
+            local name = body.order[gi]
+            local tris = body.groups[name]
+            if #tris > 0 then
+                jobs[#jobs + 1] = {
+                    model = body, tris = tris, mkey = matKey(name, gi),
+                    rx = false, ry = false, sx = 0, sy = 0,
+                }
+            end
+        end
+        runJobs(jobs, function()
+            say("body DONE")
+            task = nil
+        end)
+    end)
+end
+
+------------------------------------------------------------
+-- downloads
+------------------------------------------------------------
+say("Downloading...")
+http.get(URL_PROP, function(body, len, headers, code)
+    if code and code ~= 200 then say("propeller download failed: HTTP " .. tostring(code)) return end
+    pending[#pending + 1] = function() propPipeline(body) end
+end, function(err) say("propeller download error: " .. tostring(err)) end)
+
+http.get(URL_BODY, function(body, len, headers, code)
+    if code and code ~= 200 then say("body download failed: HTTP " .. tostring(code)) return end
+    pending[#pending + 1] = function() bodyPipeline(body) end
+end, function(err) say("body download error: " .. tostring(err)) end)
+
+hook.add("think", "DroneBuild", function()
+    if not task then
+        if #pending == 0 then return end
+        task = table.remove(pending, 1)
+    end
+    if quotaAverage() > quotaMax() * GATE then return end
+
+    local t0 = os.clock()
+    local limit = quotaMax() * FRAME_FRAC
+    frameBreak = false
+
+    while task do
+        local t = task
+        task = nil
+        local ok, err = pcall(t)
+        if not ok then
+            say("ERROR: " .. errText(err))
+            task = nil
+            return
+        end
+        if frameBreak then break end
+        if os.clock() - t0 > limit then break end
+    end
+end)
+
+------------------------------------------------------------
+-- sounds fade + propeller spin
+------------------------------------------------------------
+local fxLast = timer.systime()
+local spinAng = 0
+local spinOK = SPIN_PROPS
+
+local function updateSpin()
+    for _, p in ipairs(props) do
+        local yaw = (spinAng * p.dir) % 360
+        for _, h in ipairs(p.holos) do
+            h:setLocalAngles(Angle(0, yaw, 0))
+        end
+    end
+end
+
+hook.add("think", "DroneFx", function()
+    local now = timer.systime()
+    local dt = min(now - fxLast, 0.1)
+    fxLast = now
+
+    local pos = chip():getPos() + Vector(0, 0, 150)
+    for name, s in pairs(snd) do
+        local tv, v = target[name], vol[name]
+        local stepV = dt / FADE_TIME
+        if v < tv then v = min(tv, v + stepV) elseif v > tv then v = max(tv, v - stepV) end
+        vol[name] = v
+        if v > 0.001 then
+            if not playing[name] then s:play() playing[name] = true end
+            s:setVolume(v * MAXVOL[name])
+            s:setPos(pos)
+        elseif playing[name] then
+            s:pause()
+            playing[name] = false
+        end
+    end
+
+    if spinOK and vol.rotor > 0.001 and #props > 0 then
+        spinAng = (spinAng + SPIN_SPEED * vol.rotor * dt) % 360
+        local ok, err = pcall(updateSpin)
+        if not ok then
+            spinOK = false
+            say("propeller spin not supported: " .. errText(err))
+        end
+    end
+end)
