@@ -15,7 +15,8 @@ SCALE      = nil       -- nil = auto-fit to SIZE
 MODEL_ANG  = nil       -- nil = auto. Or e.g. Angle(0, 90, 0)
 FLIP_V     = false      -- flip texture V
 FLIP_U     = false      -- flip texture U
-RENDER_INSIDE = false   -- cull backfaces; use true only for genuinely open/thin geometry
+RENDER_INSIDE = false   -- cull backfaces
+OUTSIDE_ONLY = true     -- discard inward-facing body triangles relative to body center
 RENDER_SMOOTH = 60     -- normal smoothing target in degrees (OBJ normals are preserved)
 AUTO_TEX_VARIANTS = true  -- cycle UV orientations once per second and report each in chat
 
@@ -423,6 +424,27 @@ local function buildVerts(P, c, sc, mir, onlyMat)
         end
 
         local fx, fy, fz
+        local keepFace = true
+        if OUTSIDE_ONLY and onlyMat then
+            local e1x, e1y, e1z = px[2] - px[1], py[2] - py[1], pz[2] - pz[1]
+            local e2x, e2y, e2z = px[3] - px[1], py[3] - py[1], pz[3] - pz[1]
+            fx, fy, fz = e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x
+            local ax, ay, az = 0, 0, 0
+            for k = 1, 3 do
+                local ni = nia[k]
+                if ni > 0 then
+                    ax = ax + N[ni * 3 - 2]
+                    ay = ay + N[ni * 3 - 1]
+                    az = az + N[ni * 3]
+                end
+            end
+            if fx * ax + fy * ay + fz * az < 0 then fx, fy, fz = -fx, -fy, -fz end
+            local mx = (px[1] + px[2] + px[3]) / 3
+            local my = (py[1] + py[2] + py[3]) / 3
+            local mz = (pz[1] + pz[2] + pz[3]) / 3
+            keepFace = mx * fx + my * fy + mz * fz > 1e-9
+        end
+        if keepFace then
         for k = 1, 3 do
             local nx, ny, nz
             local ni = nia[k]
@@ -452,6 +474,7 @@ local function buildVerts(P, c, sc, mir, onlyMat)
             end
             cn = cn + 1
             cur[cn] = { pos = Vector(px[k], py[k], pz[k]), normal = Vector(nx, ny, nz), u = u, v = v }
+        end
         end
         end
         if t % 150 == 0 then pace() end
