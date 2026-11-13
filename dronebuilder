@@ -24,8 +24,8 @@ SHADE          = true  -- extra additive lit layer on top (gives shading)
 SHADE_STRENGTH = 1.0
 
 -- loading
-LOAD_BUDGET = 0.6      -- fraction of the CPU quota used per frame while loading
-                       -- 0.3 = slow/safe, 0.8 = fast (if you get quota errors, lower it)
+LOAD_BUDGET = 0.25     -- fraction of the CPU quota used per frame while loading
+                       -- Mesh creation is indivisible; keep chunks small to avoid per-call quota spikes.
 
 HOVER_HEIGHT = 30      -- height above the chip
 BOB_AMOUNT   = 0       -- up/down floating (keep 0 while picking)
@@ -356,7 +356,7 @@ end
 ---------------------------------------------------------------------------
 -- MESH BUILDING (chunked, few temp tables)
 ---------------------------------------------------------------------------
-local CH = 30000 -- vertices per mesh chunk (multiple of 3)
+local CH = 3000 -- vertices per mesh chunk (multiple of 3); createFromTable is one non-yielding CPU call
 
 -- mir: nil or axis index (1,2,3) to mirror on (winding + normals get fixed)
 local function buildVerts(P, c, sc, mir)
