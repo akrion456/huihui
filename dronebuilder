@@ -17,10 +17,10 @@ FLIP_V     = false      -- flip texture V
 FLIP_U     = false      -- flip texture U
 RENDER_INSIDE = false   -- cull backfaces; use true only for genuinely open/thin geometry
 RENDER_SMOOTH = 60     -- normal smoothing target in degrees (OBJ normals are preserved)
-AUTO_TEX_VARIANTS = false -- enable periodic texture UV variant suggestions in chat
+AUTO_TEX_VARIANTS = true  -- cycle UV orientations once per second and report each in chat
 
 -- look
-UNLIT_BRIGHT   = 0.7   -- base texture brightness, no lighting needed (raise if too dark)
+UNLIT_BRIGHT   = 1.0   -- material tint; diffuse lighting comes from VertexLitGeneric
 SHADE          = false -- optional additive layer; off by default to conserve hologram quota
 SHADE_STRENGTH = 1.0
 
@@ -154,8 +154,8 @@ local function setTex(m, tag, url)
     end)
 end
 
--- base layer: UNLIT, so the texture is always visible regardless of lighting
-S.matBase = material.create("UnlitGeneric")
+-- Diffuse-lit materials use OBJ normals and the correct per-material BaseColor atlas.
+S.matBase = material.create("VertexLitGeneric")
 setTex(S.matBase, "base")
 mset(S.matBase, "setInt", "$nocull", RENDER_INSIDE and 1 or 0)
 do
@@ -164,7 +164,7 @@ do
     mset(S.matBase, "setVector", "$color2", ub)
 end
 
-S.matVint = material.create("UnlitGeneric")
+S.matVint = material.create("VertexLitGeneric")
 setTex(S.matVint, "vint", VINT_TEX_URL)
 mset(S.matVint, "setInt", "$nocull", RENDER_INSIDE and 1 or 0)
 do
@@ -176,6 +176,29 @@ end
 S.layers = { { S.matBase, 1, false } }
 S.layersMein = { { S.matBase, 1, false } }
 S.layersVint = { { S.matVint, 1, false } }
+
+local UV_NAMES = { "original U/V", "V flipped", "U flipped", "U and V flipped" }
+local function applyUVVariant(index)
+    local flipU = index == 2 or index == 3
+    local flipV = index == 1 or index == 3
+    local sx, sy = flipU and -1 or 1, flipV and -1 or 1
+    local tx, ty = flipU and 1 or 0, flipV and 1 or 0
+    local ok, err = pcall(function()
+        local xf = Matrix()
+        xf:SetScale(Vector(sx, sy, 1))
+        xf:SetTranslation(Vector(tx, ty, 0))
+        mset(S.matBase, "setMatrix", "$basetexturetransform", xf)
+        mset(S.matVint, "setMatrix", "$basetexturetransform", xf)
+    end)
+    S.uvVariant = index
+    if not ok and not S.uvMatrixWarned then
+        S.uvMatrixWarned = true
+        say("[drone] UV material transform unavailable: " .. errText(err))
+    end
+    return ok
+end
+applyUVVariant(0)
+
 if SHADE then
     -- additive lit layer on top: adds real lighting/shading
     S.matShade = material.create("VertexLitGeneric")
@@ -945,7 +968,7 @@ C["!help"] = function()
     say("[drone] !pick !add [dir] !quad !orig !set x y z !x/!y/!z n !nudge dx dy dz !live")
     say("[drone] !move n dx dy dz !lift n !dir n !remove n !undo !clear !list")
     say("[drone] !spin !speed n !axis n !ang p y r !yaw n !propang p y r !scale n !show !axes !info !hud")
-    say("[drone] LOOK: !bright n | !shade | !tex <url> | !flipv | !flipu | !inside | !variants")
+    say("[drone] LOOK: !bright n | !shade | !tex <url> | !inside | !variants (auto UV cycle) | !variant 1-4")
 end
 C["!pick"]  = function() startPick() end
 C["!add"]   = function(a) if needPick() then addProp(S.pick, a[2]); say("[drone] added propeller #" .. #S.props) end end
@@ -1061,7 +1084,15 @@ C["!flipu"] = function() say("[drone] UV U flip is baked during mesh build; set 
 C["!inside"] = function() say("[drone] two-sided render is " .. tostring(RENDER_INSIDE) .. "; change RENDER_INSIDE at the top and reload") end
 C["!variants"] = function()
     AUTO_TEX_VARIANTS = not AUTO_TEX_VARIANTS
-    say("[drone] automatic texture variant suggestions " .. tostring(AUTO_TEX_VARIANTS) .. " (prints UV flip combinations once per second)")
+    say("[drone] automatic UV variant cycling " .. tostring(AUTO_TEX_VARIANTS))
+end
+C["!variant"] = function(a)
+    local n = tonumber(a[2])
+    if n and n >= 1 and n <= 4 then
+        AUTO_TEX_VARIANTS = false
+        applyUVVariant(math.floor(n) - 1)
+    end
+    say("[drone] UV variant " .. tostring(S.uvVariant + 1) .. ": " .. UV_NAMES[S.uvVariant + 1])
 end
 C["!show"] = function() S.show = not S.show; say("[drone] markers " .. tostring(S.show)) end
 C["!axes"] = function() S.axes = not S.axes; say("[drone] axes " .. tostring(S.axes) .. " (red X, green Y, blue Z)") end
@@ -1089,6 +1120,7 @@ net.receive("drone_cmd", function() handleChat(net.readString()) end)
 
 timer.create("drone_texvariants", 1, 0, function()
     if ISME and AUTO_TEX_VARIANTS then
-        say("[drone] texture variants: A original (U off/V off), B vertical flip (U off/V on), C horizontal flip (U on/V off), D both flips (U on/V on). Set FLIP_U/FLIP_V above and reload to compare; texture loads " .. tostring(S.texOK))
+        applyUVVariant((S.uvVariant + 1) % 4)
+        say("[drone] UV variant " .. tostring(S.uvVariant + 1) .. "/4: " .. UV_NAMES[S.uvVariant + 1])
     end
 end)
