@@ -1,0 +1,88 @@
+# MTL file - created by a modified js OBJExporter
+
+newmtl mat_ground_road
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd mat_ground_road.png
+
+newmtl mat_props02
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd mat_props02.png
+
+newmtl mat_structure
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd mat_structure.png
+
+newmtl matwindows_non_shadow_casting
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd matwindows_non_shadow_casting.png
+
+newmtl mat_walls
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd matwindows_non_shadow_casting.png
+
+newmtl mat_props01
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd mat_props01.png
+
+newmtl occluder_blocker_mesh
+Tr 1
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+
+newmtl godrays_non_shadow_casting_nobright
+Tr 0.0000
+illum 1
+Pr 0.65
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 1 1 1
+Ke 0 0 0
+map_Kd godrays_non_shadow_casting_nobright.png
