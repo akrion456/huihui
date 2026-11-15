@@ -1,5 +1,5 @@
---@name Drone RK700
---@author AkrioN
+--@name Drone OBJ + Seat + Flight + Minigun
+--@author
 --@shared
 
 -- ===== DAMAGE (server only): normal applyDamage, the server's own protection decides =====
@@ -840,7 +840,17 @@ end)
 
 net.receive("drone_hp", function()
     local h = net.readUInt(13)
-    if st.got and h <= 0 and st.hp > 0 then st.boom = true end
+    if st.got and h <= 0 and st.hp > 0 then
+        st.boom = true
+        if droneBoom then
+            pcall(droneBoom, chip():getPos() + Vector(0, 0, 80), Vector(0, 0, 1))
+        end
+    end
+    if h <= 0 and not DroneDead then
+        droneSetBurnt(true)
+    elseif h > 0 and DroneDead then
+        droneSetBurnt(false)     -- respawn: colours back
+    end
     st.got = true
     st.hp = h
 end)
@@ -967,6 +977,22 @@ local root   = nil
 
 local function hide(h)
     if h.setNoDraw then h:setNoDraw(true) else h:setColor(Color(0, 0, 0, 0)) end
+end
+
+DroneHolos = DroneHolos or {}
+DroneDead = false
+
+function droneSetBurnt(on)
+    DroneDead = on
+    local c = on and Color(22, 22, 22) or Color(255, 255, 255)
+    for i = #DroneHolos, 1, -1 do
+        local h = DroneHolos[i]
+        if h and h:isValid() then
+            pcall(h.setColor, h, c)
+        else
+            table.remove(DroneHolos, i)
+        end
+    end
 end
 
 local function makeRoot()
@@ -1435,6 +1461,8 @@ local function emitChunks(j, done)
 
         h:setRenderBounds(Vector(-HOLO_RADIUS, -HOLO_RADIUS, -HOLO_RADIUS), Vector(HOLO_RADIUS, HOLO_RADIUS, HOLO_RADIUS))
         if j.holos then j.holos[#j.holos + 1] = h end
+        DroneHolos[#DroneHolos + 1] = h
+if DroneDead then pcall(h.setColor, h, Color(22, 22, 22)) end   
         msh = nil
         pos = last + 1
         frameBreak = true
@@ -2006,7 +2034,7 @@ local CROSSHAIR = {
 }
 -- grey ring = where the barrels really point. It fades out when it is close to the screen centre.
 local AIMCIRCLE = {
-    enabled = true, radius = 20, segments = 48,
+    enabled = true, radius = 20, segments = 24,
     color = Color(160, 160, 160), alpha = 230,
     hideDist = 12,      -- ring centre closer than this (pixels) to the screen centre = invisible
     showDist = 40,      -- farther than this = fully visible, in between = smooth fade
@@ -2442,7 +2470,7 @@ do
     end
 
     -- bullet hole decals (engine decal names; the engine picks a random shotN)
-    local DEC = { enabled = true, minGap = 0.02, depth = 8 }
+    local DEC = { enabled = true, minGap = 0.02, depth = 8, count = 6, spread = 9 }
     local DNAME = {
         [67] = "Impact.Concrete", [84] = "Impact.Concrete",                       -- concrete, tile
         [89] = "Impact.Glass",
@@ -2457,7 +2485,16 @@ do
         decNext = now + DEC.minGap
         local name = DNAME[mt] or "Impact.Concrete"
         local ok, err = pcall(function()
-            trace.decal(name, pos + n * DEC.depth, pos - n * DEC.depth, filt(now))
+            local f = filt(now)
+            local ref = (math.abs(n.z) < 0.9) and Vector(0, 0, 1) or Vector(1, 0, 0)
+            local u = n:cross(ref):getNormalized()
+            local v = n:cross(u)
+            for i = 1, DEC.count do
+                local a = rnd(0, 6.2832)
+                local r = (i == 1) and 0 or sqrt(rnd(0, 1)) * DEC.spread
+                local off = u * (math.cos(a) * r) + v * (math.sin(a) * r)
+                trace.decal(name, pos + n * DEC.depth + off, pos - n * DEC.depth + off, f)
+            end
         end)
         if not ok then report("decal error", err) end
     end
@@ -2971,15 +3008,27 @@ if isOwner then
         return render.getResolution()
     end
 
-    local function ringLines(cx, cy, r, segs)
-        local px, py = cx + r, cy
-        for i = 1, segs do
-            local a = i / segs * 6.2831853
-            local x, y = cx + math.cos(a) * r, cy + math.sin(a) * r
-            render.drawLine(px, py, x, y)
-            px, py = x, y
-        end
+local ringCache = {}
+local function ringLines(cx, cy, r, segs)
+    if render.drawCircle then
+        if pcall(render.drawCircle, cx, cy, r) then return end
     end
+    local t = ringCache[segs]
+    if not t then
+        t = {}
+        for i = 0, segs do
+            local a = i / segs * 6.2831853
+            t[i] = { math.cos(a), math.sin(a) }
+        end
+        ringCache[segs] = t
+    end
+    local px, py = cx + r, cy
+    for i = 1, segs do
+        local x, y = cx + t[i][1] * r, cy + t[i][2] * r
+        render.drawLine(px, py, x, y)
+        px, py = x, y
+    end
+end
 
     local function drawCross(cx, cy)
         if not CROSSHAIR.enabled then return end
