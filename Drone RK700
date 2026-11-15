@@ -1,5 +1,5 @@
---@name Drone OBJ + Seat + Flight + Minigun
---@author
+--@name Drone RK700
+--@author AkrioN
 --@shared
 
 -- ===== DAMAGE (server only): normal applyDamage, the server's own protection decides =====
