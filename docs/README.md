@@ -119,10 +119,12 @@ With `CHEATS=1` these chat commands exist: `/give <item> [n]`, `/tp <x> <y>`,
 `/set hp|hunger|warmth <n>`, `/noshield`.
 
 What has been checked so far: the end-to-end test above, and play in headless
-Chrome at desktop size (joining, walking, gathering, crafting, chat between two
-players, night lighting, running inside a frame of another site).
-Not yet checked in a real browser: placing buildings, the bow, tents, touch
-controls and phones, and browsers other than Chrome.
+Chrome with real keyboard and mouse input: joining, gathering, crafting, eating,
+placing and feeding a campfire, cooking, walls, gate, spikes, tent, dying and
+coming back, spear, bow, armor, night, chat between two players, and running
+inside a frame of another site. Touch controls were played in Chrome's phone
+emulation (landscape and portrait).
+Not yet checked: real phones and tablets, and browsers other than Chrome.
 
 ## Art
 

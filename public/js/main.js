@@ -197,7 +197,7 @@ function onInit(m) {
   ui.showGame(true);
   ui.refreshInventory();
   if (!you.resumed) {
-    ui.addChat('', 'Welcome to the Wildwood. Press H for help, Enter to chat.', 'sys');
+    ui.addChat('', S.touch ? 'Welcome to the Wildwood. Tap ? for help.' : 'Welcome to the Wildwood. Press H for help, Enter to chat.', 'sys');
     if (!local.get('wildwood.help') && !S.touch) ui.showHelp(true);
   }
 }

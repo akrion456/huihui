@@ -453,10 +453,10 @@ const has = (id) => countItem(id) > 0;
 const TIPS = [
   { text: 'Hit a tree to collect wood - aim with the mouse and hold the button', touch: 'Walk up to a tree and hold ACT to collect wood', done: () => countItem('wood') >= 5 || has('axe') },
   { text: 'Now hit a rock to collect some stone', done: () => countItem('stone') >= 4 || has('axe') || has('pickaxe') },
-  { text: 'Craft an axe: click it in the panel on the left (8 wood, 4 stone)', done: () => S.stats.crafted.axe || has('axe') },
-  { text: 'Hungry? Hit a berry bush, select the berries and click to eat', done: () => S.stats.ate },
+  { text: 'Craft an axe: click it in the panel on the left (8 wood, 4 stone)', touch: 'Craft an axe: tap it in the panel on the left (8 wood, 4 stone)', done: () => S.stats.crafted.axe || has('axe') },
+  { text: 'Hungry? Hit a berry bush, select the berries and click to eat', touch: 'Hungry? Hit a berry bush, tap the berries in your bag, then ACT to eat', done: () => S.stats.ate },
   { text: 'Nights are deadly. Craft a campfire (12 wood, 6 stone)', done: () => S.stats.crafted.campfire || has('campfire') || S.stats.placed.campfire },
-  { text: 'Select the campfire and click on the ground to place it', done: () => S.stats.placed.campfire },
+  { text: 'Select the campfire and click on the ground to place it', touch: 'Tap the campfire in your bag, then tap the ground to place it', done: () => S.stats.placed.campfire },
   { text: 'Stay near a fire at night - wolves fear it. Press E to feed it wood', touch: 'Stay near a fire at night - wolves fear it. Tap E to feed it wood', done: () => S.stats.dawns > 0 },
   { text: 'Hunt for meat and hides, cook at a fire, build walls and a tent. Good luck!', done: () => performance.now() - tipDoneAt > 20000 },
 ];
