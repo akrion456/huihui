@@ -210,8 +210,8 @@ export function generateWorld(seed, W, H) {
   return { w: W, h: H, tiles, objects, spawn, seed };
 }
 
-/** Debug helper: `node server/worldgen.js [seed]` prints the map. */
-if (import.meta.url === `file://${process.argv[1]}`) {
+/** Debug helper: `node public/sim/worldgen.js [seed]` prints the map. */
+if (typeof process !== 'undefined' && process.argv && import.meta.url === `file://${process.argv[1]}`) {
   const seed = Number(process.argv[2] || 12345);
   const w = generateWorld(seed, 100, 100);
   const chars = ['~', '.', ',', '#', ':'];
