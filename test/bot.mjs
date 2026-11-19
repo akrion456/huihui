@@ -1,10 +1,10 @@
 // A headless game client. Used by the smoke test and by `npm run bots`
 // (a few computer-controlled survivors that walk around and gather things).
 import WebSocket from 'ws';
-import { World } from '../shared/physics.js';
+import { World } from '../public/shared/physics.js';
 import {
   OBJ_IDS, ITEM_IDS, ITEM_INDEX, OBJECTS, ITEMS, HAND, RECIPES, PLAYER_R, PLAYER_SPEED, blocksPlayer,
-} from '../shared/defs.js';
+} from '../public/shared/defs.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

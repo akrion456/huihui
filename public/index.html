@@ -84,7 +84,7 @@
     <form id="join-card" class="card" autocomplete="off">
       <img class="logo-fire" src="assets/campfire.png" alt="">
       <h1>WILDWOOD</h1>
-      <p class="tagline">Gather, craft, build and survive the nights - together.</p>
+      <p class="tagline" id="tagline">Gather, craft, build and survive the nights - together.</p>
       <label for="name">Your name</label>
       <input id="name" type="text" maxlength="14" placeholder="Survivor" spellcheck="false">
       <label>Your survivor</label>
@@ -92,6 +92,7 @@
       <button id="play" type="submit" disabled>Loading…</button>
       <div id="progress"><i></i></div>
       <p id="status" class="status">&nbsp;</p>
+      <button id="new-island" type="button" class="textbtn hidden">Start a new island</button>
       <ul class="keys">
         <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;·&nbsp; <kbd>Mouse</kbd> aim, hold to hit</li>
         <li><kbd>1</kbd>-<kbd>8</kbd> items &nbsp;·&nbsp; <kbd>E</kbd> feed fire &nbsp;·&nbsp; <kbd>Enter</kbd> chat</li>
@@ -125,6 +126,15 @@
             <li><kbd>E</kbd> - add wood to a campfire / use a tent</li>
             <li><kbd>Enter</kbd> - chat &nbsp; <kbd>H</kbd> - this help &nbsp; <kbd>M</kbd> - sound</li>
           </ul>
+          <!-- shown instead of the list above once the screen has been touched -->
+          <ul class="keys touch-keys">
+            <li><kbd>Drag</kbd> on the left side of the screen - move</li>
+            <li><kbd>ACT</kbd> - hold to hit, eat, shoot or build</li>
+            <li><kbd>Tap</kbd> the world - hit, shoot or build right there</li>
+            <li><kbd>Tap</kbd> a slot to take an item, a recipe to craft it</li>
+            <li>Drag slots to reorder, drag one out to drop it</li>
+            <li><kbd>E</kbd> - at a campfire or a tent &nbsp; <kbd>…</kbd> - chat</li>
+          </ul>
         </div>
         <div>
           <h3>Tips</h3>
@@ -137,6 +147,7 @@
           </ul>
         </div>
       </div>
+      <p class="solo-note" id="solo-note">Solo game: the world waits while this help is open.</p>
       <button id="help-close">Got it</button>
     </div>
   </div>

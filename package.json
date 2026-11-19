@@ -1,14 +1,14 @@
 {
   "name": "wildwood",
   "version": "1.0.0",
-  "description": "Wildwood - a multiplayer 2D top-down forest survival game",
+  "description": "Wildwood - a 2D top-down forest survival game: solo in the browser, or multiplayer on a server",
   "type": "module",
   "private": true,
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node test/smoke.mjs",
+    "test": "node test/smoke.mjs && node test/save.mjs && node test/solo.mjs",
     "bots": "node test/bot.mjs",
     "art": "node tools/gen_art.mjs"
   },

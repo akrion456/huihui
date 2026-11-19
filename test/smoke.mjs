@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Bot, sleep } from './bot.mjs';
-import { OBJ_IDS, ITEM_INDEX, PLAYER_R, SPAWN_SAFE_RADIUS } from '../shared/defs.js';
+import { OBJ_IDS, ITEM_INDEX, PLAYER_R, SPAWN_SAFE_RADIUS } from '../public/shared/defs.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 3900 + Math.floor(Math.random() * 500);

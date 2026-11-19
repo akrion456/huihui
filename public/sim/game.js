@@ -1,6 +1,8 @@
 // Authoritative game simulation: world, players, animals, crafting, building,
-// day/night cycle. Network transport lives in index.js - this file only talks
-// to "connections" that have send()/sendVolatile().
+// day/night cycle. It only talks to "connections" that have send() and
+// sendVolatile(), and uses nothing but plain JavaScript, so it runs in two places:
+//  - in Node, behind the web server (server/index.js): the multiplayer game
+//  - in the browser itself (public/js/local.js): the solo game, no server needed
 import {
   PROTOCOL, TILE, MAP_W, MAP_H, VIEW_W, VIEW_H, DAY_LENGTH, START_TOD,
   PLAYER_R, PLAYER_SPEED, PLAYER_MAX_HP, INV_SIZE, INTERACT_RANGE, PICKUP_RANGE,
@@ -34,15 +36,29 @@ const ARROW_RANGE = 560;
 const MAX_STRUCTURES_PER_PLAYER = 150;
 const SESSION_KEEP_MS = 10 * 60 * 1000;
 const MAX_PLAYERS = 40;
+const SAVE_VERSION = 1; // format written by exportState()
 
 // how many animals live on the island during the day
 const POPULATION = { rabbit: 26, deer: 16, boar: 12, wolf: 6, bear: 4 };
 
 export class Game {
-  constructor({ seed = 12345, log = console.log, dayLength = DAY_LENGTH, startTod = START_TOD, cheats = false } = {}) {
+  /**
+   * @param {object} [opts]
+   * @param {number} [opts.seed]      which island to generate
+   * @param {object} [opts.state]     continue a world saved with exportState() (its seed wins)
+   * @param {boolean} [opts.cheats]   chat commands like "/give wood 50" (for testing only)
+   * @param {() => number} [opts.clock]  milliseconds, for cooldowns and timestamps. The solo
+   *                                  game passes a clock that stands still while it is paused.
+   */
+  constructor({ seed = 12345, log = console.log, dayLength = DAY_LENGTH, startTod = START_TOD, cheats = false, state = null, clock = null } = {}) {
+    if (state) {
+      if (!Game.canLoad(state)) throw new Error('this saved world cannot be read');
+      seed = state.seed;
+    }
     this.log = log;
+    this.clock = clock || (() => performance.now());
     this.dayLength = dayLength;
-    this.cheats = cheats; // chat commands like "/give wood 50" (for testing only)
+    this.cheats = cheats;
     const gen = generateWorld(seed, MAP_W, MAP_H);
     this.seed = seed;
     this.world = new World(gen.w, gen.h, gen.tiles);
@@ -54,7 +70,9 @@ export class Game {
     this.spikes = new Set();
     this.regrow = new Set(); // objects waiting to grow back
     this.rockGraves = []; // used-up rocks waiting to reappear
-    for (const o of gen.objects) this.addObject(o.type, o.x, o.y, { silent: true });
+    this.time = state ? state.time : startTod * dayLength; // seconds since sunrise of day 1
+    if (state) this.importObjects(state);
+    else for (const o of gen.objects) this.addObject(o.type, o.x, o.y, { silent: true });
 
     this.players = new Map();
     this.mobs = new Map();
@@ -62,21 +80,127 @@ export class Game {
     this.arrows = new Map();
     this.sessions = new Map(); // token -> saved player state
 
-    this.time = startTod * dayLength; // seconds since sunrise of day 1
-    this.tod = startTod;
-    this.day = 1;
+    const total = this.time / dayLength;
+    this.tod = total - Math.floor(total);
+    this.day = Math.floor(total) + 1;
     this.phase = phaseOf(this.tod);
     this.acc = { spawn: 0, lb: 0, fire: 0, spike: 0, night: 0, regrow: 0 };
-    this.startedAt = performance.now();
+    this.startedAt = this.clock();
 
+    // where saved survivors stand: no dangerous animal may appear right next to them
+    this.keepClear = [];
+    if (state) this.importRest(state);
     for (const type of Object.keys(POPULATION)) {
       for (let i = 0; i < POPULATION[type]; i++) this.spawnMobRandom(type, true);
     }
-    this.log(`world ready: seed ${seed}, ${this.world.objects.size} objects, ${this.mobs.size} animals`);
+    this.log(`world ready: seed ${seed}, ${this.world.objects.size} objects, ${this.mobs.size} animals${state ? `, continued on day ${this.day}` : ''}`);
+  }
+
+  // =========================================================================
+  // saving and continuing a world
+  // =========================================================================
+  /** Is this something exportState() of this version of the game has written? */
+  static canLoad(state) {
+    return !!state && state.v === SAVE_VERSION && Number.isFinite(state.seed) && Number.isFinite(state.time) && state.time >= 0 && Array.isArray(state.objects);
+  }
+
+  /**
+   * Everything needed to continue this world later, as plain JSON data. Names
+   * are stored instead of index numbers so that a save stays readable when
+   * items or objects are added to the game. Animals are not saved: the island
+   * is simply repopulated.
+   */
+  exportState() {
+    const r1 = (v) => Math.round(v * 10) / 10;
+    const objects = [];
+    for (const o of this.world.objects.values()) {
+      const def = OBJECTS[o.type];
+      objects.push([
+        o.id, o.type, o.x, o.y, o.state,
+        def.amount ? o.amount : 0,
+        def.hp ? r1(o.hp) : 0,
+        def.maxFuel ? r1(o.fuel) : 0,
+        this.regrow.has(o) ? Math.max(1, Math.round(o.regrowAt - this.time)) : 0,
+      ]);
+    }
+    const players = {};
+    for (const [token, saved] of this.sessions) players[token] = saved;
+    for (const p of this.players.values()) if (p.token) players[p.token] = this.sessionOf(p);
+    return {
+      v: SAVE_VERSION,
+      seed: this.seed,
+      time: this.time,
+      nextObjId: this.nextObjId,
+      objects,
+      rockGraves: this.rockGraves.map((g) => [g.type, g.x, g.y, Math.max(1, Math.round(g.at - this.time))]),
+      drops: [...this.drops.values()].map((d) => [d.item, d.n, Math.round(d.x), Math.round(d.y), Math.round(d.dieAt - this.time)]),
+      players,
+    };
+  }
+
+  /** First half of loading a save: the trees, rocks and buildings. */
+  importObjects(state) {
+    let maxId = 0;
+    for (const [id, type, x, y, st, amount, hp, fuel, regrowIn] of state.objects) {
+      const def = OBJECTS[type];
+      // skip what this version of the game does not know, and what makes no sense
+      if (!def || !Number.isInteger(id) || id < 1 || this.world.objects.has(id) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const o = { id, type, x, y, r: def.r, state: st ? 1 : 0 };
+      if (def.amount) o.amount = clamp(amount, 0, def.amount);
+      if (def.hp) o.hp = hp > 0 ? Math.min(hp, def.hp) : def.hp;
+      if (def.fire) {
+        o.fuel = def.maxFuel ? clamp(fuel, 0, def.maxFuel) : Infinity;
+        this.fires.add(o);
+      }
+      if (def.spike) this.spikes.add(o);
+      if (regrowIn > 0) {
+        o.regrowAt = this.time + regrowIn;
+        this.regrow.add(o);
+      }
+      this.world.addObject(o);
+      maxId = Math.max(maxId, id);
+    }
+    this.nextObjId = Math.max(maxId + 1, Number.isInteger(state.nextObjId) ? state.nextObjId : 0);
+    for (const [type, x, y, dueIn] of state.rockGraves || []) {
+      if (OBJECTS[type] && Number.isFinite(x) && Number.isFinite(y) && dueIn > 0) this.rockGraves.push({ type, x, y, at: this.time + dueIn });
+    }
+  }
+
+  /** Second half: things lying on the ground and the survivors. */
+  importRest(state) {
+    for (const [item, n, x, y, ttl] of (state.drops || []).slice(0, 500)) {
+      if (!ITEMS[item] || !(n > 0) || !(ttl > 0) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const id = this.nextEntId++;
+      this.drops.set(id, { id, item, n, x, y, dieAt: this.time + ttl, lockId: 0, lockUntil: 0 });
+    }
+    const num = (v, lo, hi, fallback) => (Number.isFinite(v) ? clamp(v, lo, hi) : fallback);
+    for (const [token, saved] of Object.entries(state.players || {})) {
+      if (!saved || !Array.isArray(saved.inv) || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) continue;
+      const inv = new Array(INV_SIZE).fill(null);
+      saved.inv.slice(0, INV_SIZE).forEach((slot, i) => {
+        if (slot && ITEMS[slot.id] && slot.n > 0) inv[i] = { id: slot.id, n: Math.min(slot.n, stackSize(slot.id)) };
+      });
+      if (saved.alive) this.keepClear.push({ x: saved.x, y: saved.y });
+      this.sessions.set(token, {
+        savedAt: Date.now(), name: String(saved.name || ''), skin: saved.skin | 0, x: saved.x, y: saved.y,
+        hp: num(saved.hp, 1, PLAYER_MAX_HP, PLAYER_MAX_HP), hunger: num(saved.hunger, 0, 100, 100), warmth: num(saved.warmth, 0, 100, 100),
+        inv, sel: Number.isInteger(saved.sel) ? clamp(saved.sel, 0, INV_SIZE - 1) : 0, armor: !!saved.armor,
+        tent: saved.tent | 0, kills: saved.kills | 0, lived: num(saved.lived, 0, Infinity, 0), alive: !!saved.alive,
+      });
+    }
+  }
+
+  /** What is remembered about a survivor who is not connected. */
+  sessionOf(p) {
+    return {
+      savedAt: Date.now(), name: p.name, skin: p.skin, x: p.x, y: p.y, hp: p.hp, hunger: p.hunger,
+      warmth: p.warmth, inv: p.inv.map((slot) => (slot ? { id: slot.id, n: slot.n } : null)), sel: p.sel,
+      armor: p.armor, tent: p.tent, kills: p.kills, lived: this.time - p.bornAt, alive: p.alive,
+    };
   }
 
   now() {
-    return performance.now() - this.startedAt;
+    return this.clock() - this.startedAt;
   }
 
   // =========================================================================
@@ -193,13 +317,7 @@ export class Game {
     if (!p) return;
     conn.player = null;
     this.players.delete(p.id);
-    if (p.token) {
-      this.sessions.set(p.token, {
-        savedAt: Date.now(), name: p.name, skin: p.skin, x: p.x, y: p.y, hp: p.hp, hunger: p.hunger,
-        warmth: p.warmth, inv: p.inv, sel: p.sel, armor: p.armor, tent: p.tent, kills: p.kills,
-        lived: this.time - p.bornAt, alive: p.alive,
-      });
-    }
+    if (p.token) this.sessions.set(p.token, this.sessionOf(p));
     this.emitAll(['pl', p.id]);
     this.emitAll(['sys', `${p.name} left the forest.`]);
     this.log(`- ${p.name} left (${this.players.size} online)`);
@@ -210,12 +328,16 @@ export class Game {
       conn.send({ t: 'full' });
       return;
     }
+    const token = typeof rawToken === 'string' && /^[\w-]{8,40}$/.test(rawToken) ? rawToken : null;
+    // a recent session of the same survivor (page reload, reconnect, a saved solo game)?
+    for (const [tok, s] of this.sessions) if (Date.now() - s.savedAt > SESSION_KEEP_MS) this.sessions.delete(tok);
+    const saved = token && this.sessions.get(token);
+
     let name = typeof rawName === 'string' ? rawName : '';
     // eslint-disable-next-line no-control-regex
-    name = name.replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
-    if (!name) name = `Survivor${randInt(10, 99)}`;
+    const clean = (text) => text.replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
+    name = clean(name) || (saved && clean(saved.name)) || `Survivor${randInt(10, 99)}`;
     const skin = Number.isInteger(rawSkin) ? clamp(rawSkin, 0, SKIN_COUNT - 1) : 0;
-    const token = typeof rawToken === 'string' && /^[\w-]{8,40}$/.test(rawToken) ? rawToken : null;
 
     const p = {
       id: this.nextEntId++, conn, name, skin, token,
@@ -227,9 +349,6 @@ export class Game {
       evq: [], invDirty: false, lastChat: 0, warm: false, canCook: false, structures: 0,
     };
 
-    // resume a recent session (page reload / reconnect)?
-    for (const [tok, s] of this.sessions) if (Date.now() - s.savedAt > SESSION_KEEP_MS) this.sessions.delete(tok);
-    const saved = token && this.sessions.get(token);
     let resumed = false;
     if (saved) {
       this.sessions.delete(token);
@@ -926,6 +1045,8 @@ export class Game {
       if ((type === 'wolf' || type === 'boar') && t === T_GRASS && Math.random() < 0.7) return false;
       if (!initial) {
         for (const p of this.players.values()) if (dist2(x, y, p.x, p.y) < 950 * 950) return false;
+      } else if (MOBS[type].dmg) {
+        for (const c of this.keepClear) if (dist2(x, y, c.x, c.y) < 950 * 950) return false;
       }
       return true;
     });

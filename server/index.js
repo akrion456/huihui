@@ -1,6 +1,10 @@
 // Wildwood server: serves the browser client, accepts players over WebSocket
 // (with a plain HTTP polling fallback for networks that block WebSockets) and
 // runs the game simulation.
+//
+// The simulation itself (public/sim/) and the game rules (public/shared/) live
+// inside the web root, because the browser can run them as well: without this
+// server the page plays alone ("solo mode", see public/js/local.js).
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { Game } from './game.js';
-import { TICK_RATE } from '../shared/defs.js';
+import { Game } from '../public/sim/game.js';
+import { TICK_RATE } from '../public/shared/defs.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 3000);
@@ -39,10 +43,7 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
 };
-const MOUNTS = [
-  ['/shared/', path.join(ROOT, 'shared')],
-  ['/', path.join(ROOT, 'public')],
-];
+const MOUNTS = [['/', path.join(ROOT, 'public')]];
 const fileCache = new Map(); // absolute path -> { etag, body, gz }
 
 async function serveStatic(req, res, pathname) {

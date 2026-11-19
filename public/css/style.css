@@ -345,9 +345,20 @@ body.touch #netinfo { display: none; }
 .card.wide .keys { line-height: 2.1; }
 #join-card .keys { font-size: 12px; line-height: 1.9; text-align: center; margin-top: 6px; }
 .muted { color: var(--muted); }
+/* solo game: "start a new island" under the play button, a note in the help */
+.textbtn {
+  display: block; margin: 0 auto; padding: 5px 10px; border: 0; background: none;
+  color: var(--muted); font: 700 12px var(--font); text-decoration: underline;
+}
+.textbtn.armed { color: var(--bad); }
+.card .textbtn:not(:disabled):active { transform: none; box-shadow: none; }
+.solo-note { display: none; margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+body.solo .solo-note { display: block; }
 .skull { width: 64px; height: 64px; }
 #death-stats { font-size: 16px; font-weight: 700; }
 .help-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.touch-keys, body.touch .card.wide .keys:not(.touch-keys) { display: none; }
+body.touch .touch-keys { display: block; }
 .tips { list-style: none; padding: 0; margin: 0; line-height: 1.35; }
 .tips li { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--text); }
 .tips img { width: 34px; height: 34px; object-fit: contain; flex-shrink: 0; }
@@ -412,6 +423,7 @@ body.touch #netinfo { display: none; }
   .card.wide { padding: 12px 18px; }
   .card.wide h2 { font-size: 20px; margin-bottom: 4px; }
   .card.wide .keys { line-height: 1.7; margin-top: 4px; }
+  .solo-note { margin-top: 4px; }
   .tips li { margin-bottom: 4px; }
   .tips img { width: 26px; height: 26px; }
   .help-cols { grid-template-columns: 1fr 1fr; gap: 14px; }

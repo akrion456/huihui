@@ -43,14 +43,21 @@ export function initJoin(onPlay) {
     });
     box.appendChild(b);
   }
-  $('join-card').addEventListener('submit', (e) => {
+  const start = (e) => {
     e.preventDefault();
     if ($('play').disabled) return;
     const name = nameEl.value.trim();
     local.set('wildwood.name', name);
     local.set('wildwood.skin', String(skin));
     onPlay(name, skin);
+  };
+  // The form's "submit" event alone is not enough: when the game is shown inside
+  // a sandboxed frame of another page, the browser may never send it.
+  $('play').addEventListener('click', start);
+  nameEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) start(e);
   });
+  $('join-card').addEventListener('submit', start);
   if (!S.touch) nameEl.focus();
 }
 
@@ -58,19 +65,54 @@ export function setLoading(frac) {
   $('progress').firstElementChild.style.width = `${Math.round(frac * 100)}%`;
 }
 
-export function setJoinState(state, text) {
+let playLabel = 'PLAY';
+
+export function setJoinState(state, text, label) {
   const btn = $('play');
   const status = $('status');
   status.classList.toggle('err', state === 'error');
+  if (label) playLabel = label;
   if (state === 'ready' || state === 'error') {
     btn.disabled = false;
-    btn.textContent = 'PLAY';
+    btn.textContent = playLabel;
     $('progress').classList.add('hidden');
   } else if (state === 'connecting') {
     btn.disabled = true;
     btn.textContent = 'Entering the forest…';
   }
   if (text !== undefined) status.textContent = text || '\u00a0';
+}
+
+let disarmTimer = 0;
+
+/**
+ * Start screen of the solo game. With a saved island the player can go on with
+ * it or throw it away; throwing away needs a second click.
+ * @param {{hasSave: boolean, canSave: boolean, onNewIsland: () => void}} o
+ */
+export function setSoloMenu({ hasSave, canSave, onNewIsland }) {
+  document.body.classList.add('solo');
+  $('tagline').textContent = 'Gather, craft, build and survive the nights.';
+  $('solo-note').textContent = `Solo game: the world waits while this help is open.${canSave ? ' Your island is saved in this browser.' : ''}`;
+  const btn = $('new-island');
+  const disarm = () => {
+    clearTimeout(disarmTimer);
+    btn.classList.remove('armed');
+    btn.textContent = 'Start a new island';
+  };
+  disarm();
+  btn.classList.toggle('hidden', !hasSave);
+  btn.onclick = () => {
+    play('click');
+    if (!btn.classList.contains('armed')) {
+      btn.classList.add('armed');
+      btn.textContent = `${S.touch ? 'Tap' : 'Click'} again to delete the old island`;
+      disarmTimer = setTimeout(disarm, 5000); // changed your mind? it forgets the first click
+      return;
+    }
+    disarm();
+    onNewIsland();
+  };
 }
 
 export function showGame(show) {
@@ -546,7 +588,7 @@ export function updateHud(dt) {
     $('time-label').textContent = clockText(S.tod);
     $('phase-dot').className = phaseOf(S.tod);
     $('cycle-mark').style.left = `${(S.tod * 100).toFixed(1)}%`;
-    $('netinfo').textContent = S.ping ? `${Math.round(S.ping)} ms` : '';
+    $('netinfo').textContent = S.solo ? 'solo' : S.ping ? `${Math.round(S.ping)} ms` : '';
     updateTip();
     const hint = S.hint ? S.hint.text : '';
     if (hint !== lastHint) {

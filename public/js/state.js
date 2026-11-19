@@ -3,11 +3,13 @@ import { local } from './store.js';
 
 export const S = {
   phase: 'loading', // loading | menu | connecting | playing
-  net: null,
+  net: null, // Net (a game server) or LocalNet (solo game)
+  solo: false, // no game server: the game runs in this page
+  paused: false, // solo game only: the world stands still
   debug: new URLSearchParams(location.search).has('debug'),
 
   // world
-  world: null, // World (shared/physics.js) holding trees, rocks, buildings...
+  world: null, // World (../shared/physics.js) holding trees, rocks, buildings...
   terrain: null,
   spawn: { x: 0, y: 0 },
   fires: new Set(), // campfires + the Great Fire (light sources)
