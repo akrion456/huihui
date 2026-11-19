@@ -357,6 +357,8 @@ body.solo .solo-note { display: block; }
 .skull { width: 64px; height: 64px; }
 #death-stats { font-size: 16px; font-weight: 700; }
 .help-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.touch-keys, body.touch .card.wide .keys:not(.touch-keys) { display: none; }
+body.touch .touch-keys { display: block; }
 .tips { list-style: none; padding: 0; margin: 0; line-height: 1.35; }
 .tips li { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--text); }
 .tips img { width: 34px; height: 34px; object-fit: contain; flex-shrink: 0; }
