@@ -1,5 +1,9 @@
-// Wildwood browser client: connects to the server, keeps the local copy of the
+// Wildwood browser client: connects to the game, keeps the local copy of the
 // world up to date, moves the player and runs the frame loop.
+//
+// "The game" is a game server if the page comes from one (multiplayer, net.js).
+// On a plain web host there is none: then the same simulation runs right here
+// in the page (solo game, local.js). Everything else in the client is the same.
 import {
   PROTOCOL, ITEMS, ITEM_IDS, OBJ_IDS, OBJECTS, MOB_IDS, MOBS, HAND, RECIPES, PLAYER_R, PLAYER_SPEED, INTERACT_RANGE,
   blocksPlayer, PF_ARMOR, PF_SHIELD, PF_MOVING, MF_ANGRY, MF_MOVING,
@@ -18,6 +22,7 @@ import * as ui from './ui.js';
 
 const NEVER = -1e9;
 const RECIPE_IDS = RECIPES.map((r) => r.id);
+const params = new URLSearchParams(location.search);
 const round1 = (v) => Math.round(v * 10) / 10;
 const round2 = (v) => Math.round(v * 100) / 100;
 
@@ -35,6 +40,8 @@ let gainStack = 0;
 let gainStackAt = 0;
 let lastGrowl = 0;
 let lastDenyToast = 0;
+let solo = null; // the local.js module, once we know that there is no game server
+let pausedAt = 0;
 
 function token() {
   let t = session.get('wildwood.token');
@@ -61,8 +68,17 @@ function onPlay(name, skin) {
 }
 
 function connect() {
-  if (!S.net) S.net = new Net({ onOpen, onMessage, onClose });
+  if (!S.net) {
+    const handlers = { onOpen, onMessage, onClose, onSaveProblem };
+    S.net = solo
+      ? new solo.LocalNet(handlers, { cheats: params.has('cheats'), seed: params.has('seed') ? Number(params.get('seed')) : undefined })
+      : new Net(handlers);
+  }
   S.net.connect();
+}
+
+function onSaveProblem() {
+  ui.addChat('', 'This browser did not save the island. It may be gone when you close the page.', 'sys');
 }
 
 function onOpen() {
@@ -78,7 +94,7 @@ function onClose() {
     setTimeout(connect, Math.min(5000, 800 + reconnects * 400));
   } else if (S.phase === 'connecting') {
     S.phase = 'menu';
-    ui.setJoinState('error', 'Could not reach the server. Please try again.');
+    ui.setJoinState('error', S.solo ? 'The game could not be started. Please reload the page.' : 'Could not reach the server. Please try again.');
   }
 }
 
@@ -170,7 +186,7 @@ function onInit(m) {
   setTod(m.tod);
   S.serverOffset = m.n - performance.now();
   S.haveOffset = true;
-  S.renderDelay = S.net.transport === 'poll' ? 250 : 110;
+  S.renderDelay = { poll: 250, local: 70 }[S.net.transport] || 110;
   S.others.clear();
   S.mobs.clear();
   S.drops.clear();
@@ -199,8 +215,34 @@ function onInit(m) {
   if (!you.resumed) {
     ui.addChat('', S.touch ? 'Welcome to the Wildwood. Tap ? for help.' : 'Welcome to the Wildwood. Press H for help, Enter to chat.', 'sys');
     if (!local.get('wildwood.help') && !S.touch) ui.showHelp(true);
+  } else if (S.solo) {
+    ui.addChat('', `Welcome back. It is day ${m.day} on your island.`, 'sys');
+  }
+  S.paused = false;
+  refreshPause();
+}
+
+// ---------------------------------------------------------------------------
+// solo game: the world waits while nobody is looking
+// ---------------------------------------------------------------------------
+function refreshPause() {
+  if (!S.solo || !S.net || !S.me) return;
+  const want = document.hidden || ui.helpIsOpen();
+  if (want === S.paused) return;
+  S.paused = want;
+  S.net.setPaused(want);
+  const t = performance.now();
+  if (want) {
+    pausedAt = t;
+    releaseAll();
+  } else {
+    // the simulation's clock stood still: move our idea of its time along
+    S.todAt += t - pausedAt;
+    S.serverOffset -= t - pausedAt;
   }
 }
+
+document.addEventListener('visibilitychange', refreshPause);
 
 function pushSample(e, t, x, y) {
   const buf = e.buf;
@@ -763,7 +805,8 @@ function frame(t) {
   S.now = t;
   S.time = t / 1000;
   if ((S.phase === 'playing' || S.phase === 'reconnecting') && S.me) {
-    if (S.phase === 'playing') update(dt);
+    refreshPause();
+    if (S.phase === 'playing' && !S.paused) update(dt);
     updateFx(dt);
     render(dt);
     ui.updateHud(dt);
@@ -865,26 +908,66 @@ initRenderer(document.getElementById('game'));
 ui.initJoin(onPlay);
 requestAnimationFrame(frame);
 
-loadImages(ui.setLoading).then(
-  async () => {
-    spritesReady();
-    S.phase = 'menu';
-    let text = '';
+/**
+ * Is a Wildwood game server behind this page? A plain web host (GitHub Pages
+ * and the like) answers "no such file" or sends some page instead: then the
+ * game is played solo. `?solo` forces that.
+ * @returns {Promise<{players: number, day: number}|null>}
+ */
+async function findServer() {
+  if (params.has('solo')) return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 5000);
     try {
-      const res = await fetch(new URL('api/status', location.href), { cache: 'no-store' });
+      const res = await fetch(new URL('api/status', location.href), { cache: 'no-store', signal: ctl.signal });
+      if (!res.ok) return null;
       const st = await res.json();
-      text = `${st.players} survivor${st.players === 1 ? '' : 's'} in the forest · day ${st.day}`;
-    } catch {
-      /* the status line is optional */
+      return st && typeof st.players === 'number' ? st : null;
+    } catch (err) {
+      if (err instanceof SyntaxError) return null; // an answer, but not from a game server
+      // no answer at all: maybe just a hiccup, ask once more
+    } finally {
+      clearTimeout(timer);
     }
-    ui.setJoinState('ready', text);
-    // ?autojoin=Name starts right away (used by automated tests)
-    const auto = new URLSearchParams(location.search).get('autojoin');
-    if (auto) onPlay(auto, Number(new URLSearchParams(location.search).get('skin') || 0));
-  },
-  (err) => {
-    console.error(err);
-    ui.setJoinState('error', 'Could not load the game files. Please reload the page.');
-    document.getElementById('play').disabled = true;
-  },
-);
+  }
+  return null;
+}
+
+function soloMenu() {
+  const saved = solo.savedGame();
+  let text = 'Solo game · your island is saved in this browser';
+  if (saved) text = `Your island · day ${saved.day}`;
+  else if (!solo.canSave) text = 'Solo game · this browser will not keep the island';
+  ui.setJoinState('ready', text, saved ? 'CONTINUE' : 'PLAY');
+  ui.setSoloMenu({
+    hasSave: !!saved,
+    canSave: solo.canSave,
+    onNewIsland() {
+      solo.forgetSavedGame();
+      soloMenu();
+    },
+  });
+}
+
+async function boot() {
+  const [server] = await Promise.all([findServer(), loadImages(ui.setLoading)]);
+  spritesReady();
+  if (server) {
+    ui.setJoinState('ready', `${server.players} survivor${server.players === 1 ? '' : 's'} in the forest · day ${server.day}`);
+  } else {
+    solo = await import('./local.js');
+    S.solo = true;
+    soloMenu();
+  }
+  S.phase = 'menu';
+  // ?autojoin=Name starts right away (used by automated tests)
+  const auto = params.get('autojoin');
+  if (auto) onPlay(auto, Number(params.get('skin') || 0));
+}
+
+boot().catch((err) => {
+  console.error(err);
+  ui.setJoinState('error', 'Could not load the game files. Please reload the page.');
+  document.getElementById('play').disabled = true;
+});

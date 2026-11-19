@@ -84,7 +84,7 @@
     <form id="join-card" class="card" autocomplete="off">
       <img class="logo-fire" src="assets/campfire.png" alt="">
       <h1>WILDWOOD</h1>
-      <p class="tagline">Gather, craft, build and survive the nights - together.</p>
+      <p class="tagline" id="tagline">Gather, craft, build and survive the nights - together.</p>
       <label for="name">Your name</label>
       <input id="name" type="text" maxlength="14" placeholder="Survivor" spellcheck="false">
       <label>Your survivor</label>
@@ -92,6 +92,7 @@
       <button id="play" type="submit" disabled>Loading…</button>
       <div id="progress"><i></i></div>
       <p id="status" class="status">&nbsp;</p>
+      <button id="new-island" type="button" class="textbtn hidden">Start a new island</button>
       <ul class="keys">
         <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;·&nbsp; <kbd>Mouse</kbd> aim, hold to hit</li>
         <li><kbd>1</kbd>-<kbd>8</kbd> items &nbsp;·&nbsp; <kbd>E</kbd> feed fire &nbsp;·&nbsp; <kbd>Enter</kbd> chat</li>
@@ -137,6 +138,7 @@
           </ul>
         </div>
       </div>
+      <p class="solo-note" id="solo-note">Solo game: the world waits while this help is open.</p>
       <button id="help-close">Got it</button>
     </div>
   </div>

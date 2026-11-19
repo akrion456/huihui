@@ -32,13 +32,26 @@ function wrap(kind) {
       }
       return memory.has(key) ? memory.get(key) : null;
     },
+    /** @returns {boolean} true if the value will survive closing the page */
     set(key, value) {
       memory.set(key, String(value));
       if (real) {
         try {
           real.setItem(key, String(value));
+          return true;
         } catch {
           /* storage full or denied: memory has it */
+        }
+      }
+      return false;
+    },
+    remove(key) {
+      memory.delete(key);
+      if (real) {
+        try {
+          real.removeItem(key);
+        } catch {
+          /* denied: memory has forgotten it */
         }
       }
     },
