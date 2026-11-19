@@ -43,14 +43,21 @@ export function initJoin(onPlay) {
     });
     box.appendChild(b);
   }
-  $('join-card').addEventListener('submit', (e) => {
+  const start = (e) => {
     e.preventDefault();
     if ($('play').disabled) return;
     const name = nameEl.value.trim();
     local.set('wildwood.name', name);
     local.set('wildwood.skin', String(skin));
     onPlay(name, skin);
+  };
+  // The form's "submit" event alone is not enough: when the game is shown inside
+  // a sandboxed frame of another page, the browser may never send it.
+  $('play').addEventListener('click', start);
+  nameEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) start(e);
   });
+  $('join-card').addEventListener('submit', start);
   if (!S.touch) nameEl.focus();
 }
 
