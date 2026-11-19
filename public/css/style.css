@@ -271,15 +271,20 @@ kbd {
 /* ---- touch controls */
 #touch { position: absolute; inset: 0; pointer-events: none !important; }
 #touch > * { pointer-events: auto; }
-#stick-zone { position: absolute; left: 0; bottom: 150px; width: 42%; height: 46%; touch-action: none; }
-#stick-base { position: absolute; left: 34px; bottom: 20px; width: 112px; height: 112px; border-radius: 50%; background: rgba(255, 255, 255, 0.12); border: 2px solid rgba(255, 255, 255, 0.3); }
+/* The stick area is a big invisible rectangle. The panels must stay above it,
+   or taps on recipes and slots would move the stick instead. */
+#craft, #top, #side, #chat, #bottom, #toasts { z-index: 2; }
+#stick-zone { position: absolute; z-index: 1; left: 0; top: 22%; bottom: 0; width: 42%; touch-action: none; }
+#stick-base { position: absolute; left: 124px; bottom: 150px; width: 112px; height: 112px; border-radius: 50%; background: rgba(255, 255, 255, 0.12); border: 2px solid rgba(255, 255, 255, 0.3); }
 #stick-knob { position: absolute; left: 31px; top: 31px; width: 50px; height: 50px; border-radius: 50%; background: rgba(255, 255, 255, 0.55); }
-#touch button { position: absolute; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.4); background: rgba(22, 30, 20, 0.6); color: #fff; font: 800 15px var(--font); touch-action: none; }
+#touch button { position: absolute; z-index: 3; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.4); background: rgba(22, 30, 20, 0.6); color: #fff; font: 800 15px var(--font); touch-action: none; }
 #t-use { right: 26px; bottom: 170px; width: 86px; height: 86px; }
 #t-e { right: 124px; bottom: 160px; width: 56px; height: 56px; border-color: var(--accent) !important; }
 #t-chat { right: 34px; bottom: 270px; width: 44px; height: 44px; }
-body.touch #chat { bottom: auto; top: 54px; left: 122px; }
-body.touch #chat-log { max-height: 90px; }
+/* the thumbs own the lower corners: the chat log moves up, next to the craft panel */
+body.touch #chat { bottom: auto; top: 104px; left: 118px; width: min(300px, 40vw); }
+body.touch #chat-log { max-height: 54px; font-size: 12px; }
+body.touch #netinfo { display: none; }
 
 /* -------------------------------------------------------------- screens */
 .screen {
@@ -370,4 +375,44 @@ body.touch #chat-log { max-height: 90px; }
   .slot.back { height: 30px; }
   .bar .track { width: 58px; }
   #time-label { display: none; }
+  #cycle { width: 54px; }
+  /* narrow screens: the tip sits between the craft panel and the map */
+  #tip { max-width: calc(100vw - 236px); font-size: 12px; padding: 5px 10px; border-radius: 12px; }
+  body.touch #chat { top: 150px; width: calc(100vw - 130px); }
+}
+/* phones held sideways: little height, free corners at the bottom */
+@media (max-height: 500px) {
+  #craft { padding: 5px 6px 4px; }
+  #craft .panel-title { margin-bottom: 3px; font-size: 10px; }
+  #recipes { grid-template-columns: repeat(2, 36px); gap: 3px; }
+  .recipe { width: 36px; height: 36px; border-radius: 7px; }
+  .recipe img { width: 28px; height: 28px; margin-top: 2px; }
+  #minimap { width: 92px; height: 92px; }
+  #hotbar { grid-template-columns: repeat(8, 36px); }
+  .slot { width: 36px; height: 36px; }
+  .slot.back { height: 30px; }
+  #bottom { gap: 4px; bottom: 5px; }
+  #tip { font-size: 13px; padding: 5px 12px; }
+  #stick-zone { top: 18%; }
+  #stick-base { left: 112px; bottom: 26px; }
+  #t-use { right: 22px; bottom: 22px; }
+  #t-e { right: 122px; bottom: 26px; }
+  #t-chat { right: 28px; bottom: 122px; }
+  body.touch #chat { top: 92px; left: 104px; }
+  body.touch #chat-log { max-height: 36px; }
+  /* start screen: only what is needed to get going */
+  #join-card { padding: 12px 20px 10px; }
+  #join-card .logo-fire, #join-card .tagline, #join-card .keys { display: none; }
+  #join-card h1 { font-size: 28px; }
+  #join-card label { margin: 6px 0 3px; }
+  #join-card input[type="text"] { padding: 7px 10px; font-size: 16px; }
+  #join-card .skin { height: 62px; }
+  #join-card .skin img { height: 60px; }
+  #join-card button[type="submit"] { margin-top: 10px; padding: 9px; }
+  .card.wide { padding: 12px 18px; }
+  .card.wide h2 { font-size: 20px; margin-bottom: 4px; }
+  .card.wide .keys { line-height: 1.7; margin-top: 4px; }
+  .tips li { margin-bottom: 4px; }
+  .tips img { width: 26px; height: 26px; }
+  .help-cols { grid-template-columns: 1fr 1fr; gap: 14px; }
 }
